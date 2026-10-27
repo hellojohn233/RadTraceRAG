@@ -171,10 +171,26 @@ uv run radtracerag-ui
 | 深色横版 | `assets/png/logo-lockup.png` |
 | 浅色横版（README、文档） | `assets/png/logo-lockup-light.png` |
 
-logo 由 verge 生图平台产出，源图在 `~/Downloads/RadTraceRAG-*/`（含水印版）。
+logo 由 verge 生图平台产出，源图在 `~/Downloads/RadTraceRAG-*/`（含水印版），
+提示词归档在 `~/Downloads/提示词合集/44-47`。
+
+主标志是 **R 与 T 共享笔画合成的几何符号**（墨色 R + 朱砂 T）。
+它不长得像医学影像——logo 不需要长得像它服务的东西。
+按三条硬判据筛过：缩到 32px 还认得出、转纯黑单色仍然成立、跟衬线字标并排不打架。
+
+| 用途 | 文件 |
+|---|---|
+| 页面图标 | `assets/png/logo-mark-favicon-180.png` |
+| 侧边栏 / 顶栏 | `assets/png/logo-mark-128.png` |
+| 横版（深/浅） | `assets/png/logo-lockup.png`、`logo-lockup-light.png` |
+| 备选方向 | `assets/png/logo-mark-alt-R-*`、`logo-mark-alt-node-*` |
+| 纯字标 | `assets/png/wordmark-1..4.png` |
+
 重新导出：
 
 ```bash
-python assets/crop_logo.py <源图> assets/png logo-mark   # 裁方 + 各尺寸
+python assets/crop_logo.py <源图> assets/png logo-mark       # 裁方 + 各尺寸
 python assets/make_lockup.py assets/png/logo-mark-512.png assets/png/logo-lockup.png dark
+python assets/make_wordmark.py assets/png                     # 纯字标四版
+python assets/review_board.py /tmp/board.png A=图1.png B=图2.png   # 候选评审板
 ```
