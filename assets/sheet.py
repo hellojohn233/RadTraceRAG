@@ -26,6 +26,10 @@ GEORGIA_B = "/System/Library/Fonts/Supplemental/Georgia Bold.ttf"
 
 
 def crop_square(im: Image.Image, pad: float = 0.1) -> Image.Image:
+    if im.mode in ("RGBA", "LA"):
+        flat = Image.new("RGB", im.size, PAPER)
+        flat.paste(im.convert("RGBA"), mask=im.convert("RGBA").split()[-1])
+        im = flat
     a = np.asarray(im.convert("RGB")).astype(np.int16)
     h, w, _ = a.shape
     cor = np.concatenate(
