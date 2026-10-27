@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="RadTraceRAG">
+  <title>RadTraceRAG — 出处角标（描边）</title>
+  <desc>描边方块，右上角压着实心出处标记。</desc>
+  <rect x="4.25" y="7.25" width="12.5" height="12.5" rx="1.2"
+        fill="none" stroke="#16202E" stroke-width="2.5"/>
+  <rect x="14.2" y="3.4" width="4.8" height="4.8" rx="0.8" fill="#C0472B"/>
+</svg>

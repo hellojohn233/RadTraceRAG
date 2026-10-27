@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="RadTraceRAG">
+  <title>RadTraceRAG — RT 合体</title>
+  <desc>顶部横杠同时是 R 的顶和 T 的横；R 的竖从横的下沿垂下，朱砂竖是 T 的竖。</desc>
+  <rect x="4.2" y="3.4" width="15.6" height="2.4" fill="#16202E"/>
+  <rect x="4.2" y="5.8" width="2.4" height="14.6" fill="#16202E"/>
+  <rect x="17.4" y="3.4" width="2.4" height="17" fill="#C0472B"/>
+  <path d="M 6.6 5.8 L 9.9 5.8 A 3.5 3.5 0 0 1 9.9 12.8 L 6.6 12.8"
+        fill="none" stroke="#16202E" stroke-width="2.4" stroke-linejoin="miter"/>
+  <path d="M 7.8 12.8 L 13.4 20.4"
+        fill="none" stroke="#16202E" stroke-width="2.4" stroke-linecap="butt"/>
+</svg>

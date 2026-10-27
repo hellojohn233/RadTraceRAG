@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="RadTraceRAG">
+  <title>RadTraceRAG — 出处角标</title>
+  <desc>一块记录，右上角压着出处标记。</desc>
+  <!-- 主块：一条记录 -->
+  <rect x="3" y="6" width="13" height="13" rx="1.6" fill="#16202E"/>
+  <!-- 出处角标：压在右上角，重叠部分即「这条记录有出处」 -->
+  <rect x="14.2" y="3.4" width="4.8" height="4.8" rx="0.8" fill="#C0472B"/>
+</svg>
