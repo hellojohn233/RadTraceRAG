@@ -1,0 +1,8 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><title>RadTraceRAG — 检索轨迹</title><desc>折线是检索轨迹：图像理解 → 查询构造 → 命中。朱砂点落在命中那一步，和界面里「命中」用朱砂完全一致。</desc>
+  
+  <path d="M 16 80 L 16 50 L 44 50 L 44 26 L 66 26" fill="none" stroke="currentColor"
+        stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="16" cy="80" r="3.4" fill="currentColor"/>
+  <circle cx="44" cy="50" r="4.2" fill="currentColor"/>
+  <circle cx="66" cy="26" r="5.8" fill="#C0472B"/>
+</svg>

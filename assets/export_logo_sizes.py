@@ -20,7 +20,7 @@ from render_svg import render  # noqa: E402
 ROOT = Path(__file__).parent.parent
 LOGO = ROOT / "assets" / "logo"
 SIZES = [1024, 256, 64, 32, 16]
-LOCKUP_IDS = ["01-monogram-r", "05-trace-spiral"]
+LOCKUP_IDS = ["06-monogram-r", "01-window-level", "03-image-to-trace", "04-retrieval-trace"]
 
 
 def main() -> None:

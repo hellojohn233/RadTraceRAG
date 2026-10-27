@@ -14,13 +14,20 @@ from pathlib import Path
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 
-def render(svg: Path, out: Path, size: int, bg: str = "FBFAF7", color: str = "16202E") -> None:
+def render(svg: Path, out: Path, size: int, bg: str = "FBFAF7", color: str = "16202E",
+           mono: bool = True) -> None:
     bg_css = "transparent" if bg.lower() == "transparent" else f"#{bg}"
     html = Path(tempfile.gettempdir()) / f"_r_{svg.stem}.html"
+    # 强调色（朱砂）跟着 color 一起走：传 000000 就是纯单色版
+    src = svg.read_text(encoding="utf-8")
+    if mono and "#C0472B" in src and color != "C0472B":
+        src = src.replace("#C0472B", f"#{color}")
+    tmp_svg = Path(tempfile.gettempdir()) / f"_r_{svg.stem}_c.svg"
+    tmp_svg.write_text(src, encoding="utf-8")
     html.write_text(
         f"""<html><body style="margin:0;background:{bg_css};color:#{color}">
 <div style="width:{size}px;height:{size}px;display:flex;align-items:center;justify-content:center">
-<img src="file://{svg.resolve()}" width="{size}" height="{size}">
+<img src="file://{tmp_svg}" width="{size}" height="{size}">
 </div></body></html>""",
         encoding="utf-8",
     )

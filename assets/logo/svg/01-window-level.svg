@@ -1,0 +1,13 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><title>RadTraceRAG — 窗位</title><desc>医学影像最核心的一步是调窗宽窗位：直方图是像素值分布，朱砂框住的那一段就是当前显示的灰阶。行内人一眼认得，外行也觉得是个严谨的图表。</desc>
+  
+  <g fill="currentColor">
+    <rect x="6" y="58" width="9" height="22" rx="1"/>
+    <rect x="19" y="46" width="9" height="34" rx="1"/>
+    <rect x="32" y="36" width="9" height="44" rx="1"/>
+    <rect x="45" y="28" width="9" height="52" rx="1"/>
+    <rect x="58" y="34" width="9" height="46" rx="1"/>
+    <rect x="71" y="48" width="9" height="32" rx="1"/>
+    <rect x="84" y="62" width="9" height="18" rx="1"/>
+  </g>
+  <rect x="28" y="22" width="42" height="62" rx="4" fill="none" stroke="#C0472B" stroke-width="2.6"/>
+</svg>

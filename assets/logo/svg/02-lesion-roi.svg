@@ -1,0 +1,10 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><title>RadTraceRAG — 病灶</title><desc>阅片时医生用取景角标圈出可疑病灶，就是这个角标加一个朱砂点。角标是影像上的位置，点是被找到的东西。</desc>
+  
+  <g fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round">
+    <path d="M 20 42 L 20 22 L 40 22"/>
+    <path d="M 20 62 L 20 82 L 40 82"/>
+    <path d="M 64 82 L 82 82 L 82 64"/>
+    <path d="M 82 40 L 82 22 L 66 22"/>
+  </g>
+  <circle cx="48" cy="51" r="6" fill="#C0472B"/>
+</svg>

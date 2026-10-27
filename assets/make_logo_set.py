@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """组装最终 logo 候选包。
 
-  assets/logo/svg/<id>.svg      8 个候选（带 <title>，currentColor）
-  assets/logo/png/<id>-512.png  透明底 512 导出
-  assets/logo/showcase.html     自包含展示页（无外部依赖）
+  assets/logo/svg/<id>.svg       候选（currentColor + 朱砂强调）
+  assets/logo/png/<id>-512.png   2 彩导出（透明底）
+  assets/logo/showcase.html      自包含展示页
 
 用法：python make_logo_set.py
 """
@@ -28,15 +28,54 @@ PAPER = "#FBFAF7"
 # id, 名称, 源文件, 分组, 设计说明
 VARIANTS = [
     (
-        "01-monogram-r",
+        "01-window-level",
+        "窗位",
+        "assets/marks9/m2-window.svg",
+        "影像",
+        "医学影像最核心的一步是调窗宽窗位：直方图是像素值分布，朱砂框住的那一段就是"
+        "当前显示的灰阶。行内人一眼认得，外行也觉得是个严谨的图表。",
+    ),
+    (
+        "02-lesion-roi",
+        "病灶",
+        "assets/marks9/m7-lesion.svg",
+        "影像",
+        "阅片时医生用取景角标圈出可疑病灶，就是这个角标加一个朱砂点。"
+        "角标是影像上的位置，点是被找到的东西。",
+    ),
+    (
+        "03-image-to-trace",
+        "影 → 迹",
+        "assets/marks10/a-trace-from-plate.svg",
+        "影像",
+        "方块是那一张影像，折线是检索轨迹，朱砂点是命中的那一步。"
+        "一件东西里放进了「影像 + 溯源 + 命中」三层意思。",
+    ),
+    (
+        "04-retrieval-trace",
+        "检索轨迹",
+        "assets/marks9/m8-trace.svg",
+        "影像",
+        "折线是检索轨迹：图像理解 → 查询构造 → 命中。朱砂点落在命中那一步，"
+        "和界面里「命中」用朱砂完全一致。",
+    ),
+    (
+        "05-voxel-mark",
+        "影像格",
+        "assets/marks9/m9-voxel.svg",
+        "影像",
+        "3×3 是影像的像素矩阵，朱砂点标出那一格，引线把它带到证据。",
+    ),
+    (
+        "06-monogram-r",
         "R 单体",
         "assets/marks4/p3-r.svg",
         "字标",
-        "Georgia Bold 的 R 直接用做单体字标。和 UI 里 Georgia 衬线字标同族，"
-        "整套品牌像一本医学期刊的刊头。零装饰，靠字形本身的质量说话。",
+        "Georgia Bold 的 R 直接用做单体字标，和 UI 的 Georgia 衬线字标同族，"
+        "整套品牌像一本医学期刊的刊头。零装饰，靠字形质量说话。",
     ),
     (
-        "02-rt-ligature",
+        "07-rt-ligature",
         "RT 合字",
         "assets/marks4/p7-rt.svg",
         "字标",
@@ -44,7 +83,7 @@ VARIANTS = [
         "但也更容易被读成 ℞（处方符号）。",
     ),
     (
-        "03-citation-mark",
+        "08-citation-mark",
         "引用标记",
         "assets/marks4/p2-semicolon-square.svg",
         "字标",
@@ -52,51 +91,18 @@ VARIANTS = [
         "整个产品就是一份带引文的报告，这个记号直接对应。",
     ),
     (
-        "04-citation-comma",
-        "引用逗号",
-        "assets/marks4/p6-comma.svg",
-        "字标",
-        "更极端的版本：一个逗号就是全部标志。黑白印刷里它最好用，"
-        "但语义要靠文案补。",
-    ),
-    (
-        "05-trace-spiral",
+        "09-trace-spiral",
         "溯源",
         "assets/marks6/q1b-spiral.svg",
         "符号",
         "一条线绕回中心，中心是那个被追到的原点。溯源不是查一次就完，"
         "是能一路退回起点。纯几何，和任何医学影像没有相似性。",
     ),
-    (
-        "06-annotation-leader",
-        "标注引线",
-        "assets/marks5/q3-leader.svg",
-        "符号",
-        "点 + 折线 + 方块，是图表和论文里标注引线的结构。回答从图像出发，"
-        "指向一条证据。",
-    ),
-    (
-        "07-echo-arcs",
-        "两次观察",
-        "assets/marks5/q4-halfring.svg",
-        "符号",
-        "一段粗弧、一段细弧，像同一处被看过两次。RAG 前后两轮，"
-        "第二次比第一次轻。",
-    ),
-    (
-        "08-aperture-ring",
-        "环缺",
-        "assets/marks4/p5-gapring.svg",
-        "符号",
-        "厚环开一道缺口，节点从缺口探出。最抽象的一个，"
-        "结构稳、缩到 16px 也认得出。",
-    ),
 ]
 
 
-def add_title(svg: str, title: str, desc: str) -> str:
-    svg = svg.replace(">", f"><title>{title}</title><desc>{desc}</desc>", 1)
-    return svg
+def add_meta(svg: str, title: str, desc: str) -> str:
+    return svg.replace(">", f"><title>{title}</title><desc>{desc}</desc>", 1)
 
 
 def main() -> None:
@@ -109,22 +115,14 @@ def main() -> None:
     for vid, name, src, group, desc in VARIANTS:
         raw = (ROOT / src).read_text(encoding="utf-8")
         raw = re.sub(r"<!--.*?-->", "", raw, flags=re.S)
-        body = add_title(raw.strip(), f"RadTraceRAG — {name}", desc)
+        body = add_meta(raw.strip(), f"RadTraceRAG — {name}", desc)
         (svg_dir / f"{vid}.svg").write_text(body + "\n", encoding="utf-8")
 
         png = png_dir / f"{vid}-512.png"
-        render(svg_dir / f"{vid}.svg", png, 512, bg="transparent", color="16202E")
+        render(svg_dir / f"{vid}.svg", png, 512, bg="transparent", color="16202E", mono=False)
         print("rendered", png)
 
-        cards.append(
-            {
-                "id": vid,
-                "name": name,
-                "group": group,
-                "desc": desc,
-                "svg": body,
-            }
-        )
+        cards.append({"id": vid, "name": name, "group": group, "desc": desc, "svg": body})
 
     (OUT / "showcase.html").write_text(build_html(cards), encoding="utf-8")
     print("wrote", OUT / "showcase.html")
@@ -175,21 +173,19 @@ def build_html(cards) -> str:
     font-family: Georgia, "Times New Roman", "Songti SC", serif;
     -webkit-font-smoothing: antialiased;
   }}
-  header {{ max-width: 1180px; margin: 0 auto 44px; }}
-  h1 {{ font-size: 34px; font-weight: 400; margin: 0 0 10px; letter-spacing: .01em; }}
-  .sub {{ font-size: 15px; line-height: 1.75; color: #4A5563; max-width: 760px; margin: 0; }}
-  .rules {{ margin: 22px 0 0; max-width: 760px; }}
-  .rules li {{ font-size: 14px; line-height: 1.85; color: #4A5563; margin: 0 0 4px; }}
-  .rules b {{ font-weight: 400; color: var(--cinnabar); }}
+  header {{ max-width: 1180px; margin: 0 auto 40px; }}
+  h1 {{ font-size: 34px; font-weight: 400; margin: 0 0 10px; }}
+  .sub {{ font-size: 15px; line-height: 1.75; color: #4A5563; max-width: 780px; margin: 0 0 18px; }}
+  .legend {{ font-family: "Helvetica Neue", Arial, sans-serif; font-size: 12px;
+             letter-spacing: .1em; color: #9AA3AE; margin: 0 0 6px; }}
   .grid {{
     max-width: 1180px; margin: 0 auto;
     display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
     gap: 1px; background: var(--rule); border: 1px solid var(--rule);
   }}
   .card {{ background: var(--paper); padding: 26px 26px 22px; margin: 0; }}
-  .mark {{ height: 168px; display: flex; align-items: center; justify-content: center; }}
-  .mark svg {{ width: 150px; height: 150px; color: var(--ink); transition: color .25s; }}
-  .card:hover .mark svg {{ color: var(--cinnabar); }}
+  .mark {{ height: 170px; display: flex; align-items: center; justify-content: center; }}
+  .mark svg {{ width: 150px; height: 150px; color: var(--ink); }}
   .row {{ display: flex; align-items: baseline; gap: 10px; margin: 20px 0 8px;
           border-top: 1px solid var(--rule); padding-top: 12px; }}
   .idx {{ font-family: "Helvetica Neue", Arial, sans-serif; font-size: 11px;
@@ -197,13 +193,13 @@ def build_html(cards) -> str:
   .name {{ font-size: 17px; }}
   .group {{ margin-left: auto; font-family: "Helvetica Neue", Arial, sans-serif;
             font-size: 11px; letter-spacing: .12em; color: var(--cinnabar); }}
-  .desc {{ font-size: 13px; line-height: 1.8; color: #4A5563; margin: 0 0 16px; min-height: 70px; }}
+  .desc {{ font-size: 13px; line-height: 1.8; color: #4A5563; margin: 0 0 16px; min-height: 86px; }}
   .checks {{ display: flex; align-items: flex-end; gap: 18px; padding: 12px 0 14px;
              border-top: 1px solid var(--rule); }}
   .check {{ display: flex; align-items: center; gap: 6px; }}
   .check svg {{ width: 16px; height: 16px; color: var(--ink); }}
   .check:nth-child(3) svg {{ width: 32px; height: 32px; }}
-  .check.mono svg {{ color: #000; }}
+  .check.mono svg [fill="{CINNABAR}"] {{ fill: #000; }}
   .k {{ font-family: "Helvetica Neue", Arial, sans-serif; font-size: 9px; color: #A8AEB8; }}
   .lockup {{ display: flex; align-items: center; gap: 11px; padding-top: 13px;
              border-top: 1px solid var(--rule); }}
@@ -217,13 +213,10 @@ def build_html(cards) -> str:
 <body>
 <header>
   <h1>RadTraceRAG — 标志候选集</h1>
-  <p class="sub">八个方向，全部避开看片/影像类图形。墨色 #16202E 单色成立，
-  几何尺寸统一 100×100，缩到 16px 仍可辨。</p>
-  <ul class="rules">
-    <li><b>01 R 单体</b> —— 和 Georgia 衬线字标同族，最像一本期刊的刊头。</li>
-    <li><b>05 溯源</b> —— 纯符号，一条线绕回被追到的原点。</li>
-    <li><b>03 引用标记</b> —— 分号是引文清单的记号，句点改方块。</li>
-  </ul>
+  <p class="sub">九个方向分三派：<b>影像派</b>取自这个项目自己的元素——窗宽窗位、阅片角标、
+  检索轨迹、像素矩阵、影像到命中的路径；<b>字标派</b>承接报告与论文的排版语言；
+  <b>符号派</b>是纯抽象。全部避开看片、靶心、胶片这类烂俗医疗图标。</p>
+  <p class="legend">每张卡片下方四格：16px 彩色 · 16px 纯黑单色 · 32px 彩色 · 32px 纯黑单色</p>
 </header>
 <div class="grid">
 {chr(10).join(card_html)}

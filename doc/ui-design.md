@@ -194,3 +194,25 @@ python assets/make_lockup.py assets/png/logo-mark-512.png assets/png/logo-lockup
 python assets/make_wordmark.py assets/png                     # 纯字标四版
 python assets/review_board.py /tmp/board.png A=图1.png B=图2.png   # 候选评审板
 ```
+
+### 候选集（未定稿）
+
+上表仍是 AI 生图那版。新的候选集在 `assets/logo/`：
+
+- **影像派**（取自本项目自己的元素）：`01-window-level` 窗宽窗位、
+  `02-lesion-roi` 阅片角标、`03-image-to-trace` 影像到命中的路径、
+  `04-retrieval-trace` 检索轨迹、`05-voxel-mark` 像素矩阵
+- **字标派**（承接报告与论文的排版语言）：`06-monogram-r`、`07-rt-ligature`、
+  `08-citation-mark`
+- **符号派**：`09-trace-spiral`
+
+每个候选有 svg（`currentColor` + 朱砂强调）、1024/512/256/64/32/16 的透明底 png、
+横版 lockup，`assets/logo/showcase.html` 是自包含的对比页。
+
+```bash
+python assets/make_logo_set.py          # 生成 svg + png + showcase
+python assets/export_logo_sizes.py       # 各尺寸导出 + lockup
+python assets/sheet.py /tmp/sheet.png 01=/path/a.png 02=/path/b.png   # 评审板
+```
+
+定稿后要把本节资源表整体替换为新资产，并更新 UI 顶栏、侧边栏和 favicon。

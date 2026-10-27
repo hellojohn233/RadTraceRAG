@@ -1,0 +1,6 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- 从影像出发，走到命中 -->
+  <rect x="12" y="66" width="26" height="26" rx="4" fill="none" stroke="currentColor" stroke-width="3.2"/>
+  <path d="M 38 79 L 52 79 L 52 52 L 68 52" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="72" cy="52" r="6" fill="#C0472B"/>
+</svg>

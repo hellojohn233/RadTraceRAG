@@ -1,0 +1,11 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- 圈到的病灶，指向它的证据 -->
+  <g fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round">
+    <path d="M 16 40 L 16 22 L 34 22"/>
+    <path d="M 16 60 L 16 78 L 34 78"/>
+    <path d="M 58 78 L 74 78 L 74 62"/>
+  </g>
+  <circle cx="38" cy="50" r="6" fill="#C0472B"/>
+  <line x1="43" y1="45" x2="70" y2="22" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>
+  <rect x="68" y="8" width="16" height="16" rx="3" fill="currentColor"/>
+</svg>
