@@ -1,0 +1,6 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- 环开一道缺口，节点从缺口探出 -->
+  <circle cx="48" cy="52" r="30" fill="none" stroke="currentColor" stroke-width="8.5"
+          stroke-dasharray="164.4 24.1" transform="rotate(117.0 48 52)"/>
+  <circle cx="78.6" cy="26.3" r="6.5" fill="currentColor"/>
+</svg>

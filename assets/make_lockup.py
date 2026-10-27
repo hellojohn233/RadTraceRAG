@@ -44,11 +44,11 @@ def main() -> None:
     base = Image.new("RGBA", (W, H), (INK + (255,)) if dark else (PAPER + (255,)))
     d = ImageDraw.Draw(base)
 
-    size = 196
+    size = 150
     icon = icon.resize((size, size), Image.LANCZOS)
-    base.alpha_composite(icon, (40, (H - size) // 2))
+    base.alpha_composite(icon, (44, (H - size) // 2))
 
-    x = 40 + size + 46
+    x = 44 + size + 52
     title_font = load_font(72)
     tag_font = load_font(19)
 
