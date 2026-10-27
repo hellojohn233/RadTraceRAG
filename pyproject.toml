@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "radtracerag"
+version = "0.1.0"
+description = "Evidence-grounded multimodal RAG for medical image questions"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "lightrag-hku>=1.5.7,<1.6",
+]
+
+[project.scripts]
+radtracerag = "radtracerag.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/radtracerag"]
