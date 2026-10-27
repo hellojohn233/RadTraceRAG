@@ -21,3 +21,21 @@ class Evidence:
 class Answer:
     text: str
     evidence_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ImageObservation:
+    """与当前问题相关的图像观察，不是整张图的泛化描述。"""
+
+    text: str
+    entities: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RetrievalStep:
+    """检索轨迹的一步，用于把「答案怎么来的」摊开给人看。"""
+
+    stage: str
+    detail: str
+    elapsed_ms: int = 0
+    count: int = 0

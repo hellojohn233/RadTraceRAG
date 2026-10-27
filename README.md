@@ -1,5 +1,9 @@
 # RadTraceRAG
 
+<p align="center">
+  <img src="assets/png/logo-lockup-light.png" alt="RadTraceRAG" width="520">
+</p>
+
 **面向医学影像问答的可追溯多模态 RAG 项目。** 通过视觉语言模型理解影像，用 [LightRAG](https://github.com/HKUDS/LightRAG) 检索相关医学知识，并将回答与证据关联起来。
 
 RadTraceRAG 关注一个可以量化的问题：**当问题同时需要看懂影像和使用外部知识时，检索究竟有没有帮助？** 项目会在同一数据与模型设置下比较直接回答、向量检索和图增强检索，公开逐题结果、检索指标与失败案例。
@@ -62,9 +66,36 @@ src/radtracerag/
 ├── config.py              # 数据、索引目录配置
 ├── contracts.py           # 影像问题、证据和答案的数据结构
 ├── integrations/lightrag.py  # LightRAG 查询接入点
+├── ui/                    # 演示界面（Streamlit）
 ├── data/                  # SLAKE 数据适配位置
 └── evaluation/            # 检索与问答评测位置
 ~~~
+
+## 演示界面
+
+~~~bash
+uv run radtracerag-ui
+~~~
+
+浏览器打开 http://localhost:8501 。
+
+界面把一次问答摊开成四层：**答案 → 图像观察 + 检索轨迹 → 证据链**。
+左侧常驻影像，右侧按「看到了什么、检索到了什么、结论靠哪几条证据撑着」的顺序排。
+侧边栏可以切换三组对照，直接看检索到底带来了什么。
+
+<p align="center">
+  <img src="assets/ui-preview.png" alt="图增强 RAG 模式" width="900">
+</p>
+
+同一张片子切到「无 RAG」模式，答案没有任何证据可回溯，轨迹也只有两步：
+
+<p align="center">
+  <img src="assets/ui-preview-no-rag.png" alt="无 RAG 模式" width="900">
+</p>
+
+> 界面目前跑的是合成样例数据，影像由程序生成，不是真实病例。
+> 真实问答链路接上后，改动只在 `ui/app.py` 的 `run_question()` 一处，界面不动。
+> 配色和组件规范见[界面设计规范](doc/ui-design.md)。
 
 ## 数据集
 
@@ -114,15 +145,17 @@ SLAKE 的参考答案可以用于问答评测，但其 <code>triple</code> 字�
 
 - [x] 确定产品范围、数据集和评测协议
 - [x] 建立 Python 包、LightRAG 接入点与环境检查命令
+- [x] 完成演示界面：影像、答案、证据链与检索轨迹
 - [ ] 固定数据版本，完成知识库导入与证据 ID 规范
 - [ ] 实现无 RAG、向量 RAG、图增强 RAG 三组对照
 - [ ] 发布证据标注集、评测脚本和首份实验报告
-- [ ] 完成可查看检索轨迹的交互演示
+- [ ] 把演示界面接到真实问答链路上
 
 ## 项目文档
 
 - [产品业务方向](doc/product-direction.md)：目标用户、使用流程、数据选择和产品边界。
 - [技术栈与实现方案](doc/tech-stack.md)：模块划分、LightRAG 集成方式和评测设计。
+- [界面设计规范](doc/ui-design.md)：配色语义、组件规格和实现约定。
 
 问答流程可运行后，README 会继续补充数据准备、模型配置和批量评测命令。
 

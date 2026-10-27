@@ -10,10 +10,12 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "lightrag-hku>=1.5.7,<1.6",
+    "streamlit>=1.40",
 ]
 
 [project.scripts]
 radtracerag = "radtracerag.cli:main"
+radtracerag-ui = "radtracerag.ui.launch:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/radtracerag"]
