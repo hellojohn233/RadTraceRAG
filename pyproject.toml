@@ -11,6 +11,9 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "lightrag-hku>=1.5.7,<1.6",
     "streamlit>=1.40",
+    # 演示影像用程序合成，需要 numpy 算灰度场、pillow 做高斯模糊与保存
+    "numpy>=1.26",
+    "pillow>=10.0",
 ]
 
 [project.scripts]

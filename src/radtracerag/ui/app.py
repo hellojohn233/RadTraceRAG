@@ -2,8 +2,9 @@
 
     uv run radtracerag-ui          # 启动后打开 http://localhost:8501
 
-界面的叙事顺序就是产品的核心承诺：先给答案，再把「它看到了什么、
-检索到了什么、命中了哪些证据」一层层摊开。
+界面的排版参照放射科报告和论文：左边摊着片子，右边从上到下是
+「问 → 答 → 图像观察 → 检索轨迹 → 证据」，证据按脚注编号列在最后。
+整页读下来是一份「答案 + 它凭什么这么说」的文档。
 
 真实问答链路接上之前，界面跑的是 demo_data 里的假数据。
 接入点在 `run_question()` —— 把里面换成 pipeline 调用即可，界面不动。
@@ -19,14 +20,13 @@ import streamlit as st
 from radtracerag.contracts import Answer, Evidence, ImageObservation, RetrievalStep
 from radtracerag.ui import components as C
 from radtracerag.ui.demo_data import MODES, load_demo
-from radtracerag.ui.theme import COLORS, apply_theme
+from radtracerag.ui.theme import apply_theme
 
 ASSETS = Path(__file__).resolve().parents[3] / "assets"
 
-
 st.set_page_config(
     page_title="RadTraceRAG",
-    page_icon=str(ASSETS / "png" / "favicon-180.png"),
+    page_icon=str(ASSETS / "png" / "logo-mark-favicon-180.png"),
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -53,7 +53,7 @@ def run_question(
     ImageObservation | None,
     list[Evidence],
     list[RetrievalStep],
-    list[tuple[str, str, str]],
+    list[tuple[str, str]],
 ]:
     """问一次。真实链路接好后，这里改成 pipeline 调用。"""
     case = load_demo(mode)
@@ -77,12 +77,13 @@ with st.sidebar:
     logo_uri = C.img_uri(ASSETS / "png" / "logo-mark-128.png")
     st.markdown(
         f"""
-        <div style="display:flex;align-items:center;gap:11px;margin-bottom:18px;">
-          <img src="{logo_uri}"
-               style="height:38px;border-radius:9px;">
+        <div style="display:flex;align-items:center;gap:11px;margin-bottom:22px;">
+          <img src="{logo_uri}" style="height:36px;border-radius:5px;">
           <div>
-            <div style="font-size:16px;font-weight:650;letter-spacing:-0.02em;">RadTraceRAG</div>
-            <div style="font-size:10.5px;color:{COLORS['text_mute']};letter-spacing:0.13em;">
+            <div style="font-family:'Songti SC',Georgia,serif;font-size:16px;font-weight:600;">
+              RadTraceRAG
+            </div>
+            <div style="font-size:10px;color:#8A94A2;letter-spacing:0.2em;">
               TRACEABLE MULTIMODAL RAG
             </div>
           </div>
@@ -97,86 +98,83 @@ with st.sidebar:
         type=["png", "jpg", "jpeg", "dcm", "nii"],
         label_visibility="collapsed",
     )
-    st.caption("支持 PNG / JPG / DICOM，单张不超过 200 MB")
+    st.caption("PNG / JPG / DICOM，单张不超过 200 MB")
 
     st.markdown("")
     st.markdown("**问题**")
     question = st.text_area(
         "对这张影像提问",
         value="图中主要器官的作用是什么？",
-        height=90,
+        height=88,
         label_visibility="collapsed",
     )
 
     st.markdown("")
-    st.markdown("**检索模式**")
-    mode = st.radio(
-        "检索模式",
-        list(MODES.keys()),
-        index=2,
-        label_visibility="collapsed",
-        key="sidebar_mode",
-    )
-    st.caption(MODES[mode]["desc"])
-
+    st.markdown("**检索深度**")
     top_k = st.slider("Top-K", 1, 10, 4)
+    st.caption(MODES["C · 图增强 RAG"]["desc"])
 
     st.markdown("")
     ask = st.button("提问", type="primary", use_container_width=True)
 
     st.markdown("")
     st.markdown(
-        f"""
-        <div style="font-size:11.5px;color:{COLORS['text_mute']};line-height:1.65;
-                    border-top:1px solid {COLORS['border']};padding-top:12px;">
-          演示模式：数据为合成样例<br>
+        """
+        <div style="font-size:11.5px;color:#8A94A2;line-height:1.7;
+                    border-top:1px solid #E2E0DA;padding-top:12px;">
+          演示模式：影像与答案均为合成样例<br>
           非真实患者数据，不用于诊断
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-# ---------------------------------------------------------------- 主区
+# ---------------------------------------------------------------- 顶栏 + 对照组
 
-C.topbar(logo=ASSETS / "png" / "logo-mark-128.png")
+head, ctrl = st.columns([3, 2], gap="medium", vertical_alignment="center")
+with head:
+    C.topbar(logo=ASSETS / "png" / "logo-mark-128.png")
+with ctrl:
+    mode = st.radio(
+        "检索模式",
+        list(MODES.keys()),
+        index=2,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="rt_mode",
+    )
+
+# ---------------------------------------------------------------- 主区
 
 image_path = save_upload(uploaded)
 if image_path is None:
     image_path = load_demo(mode).image
 
-if ask or st.session_state.get("rt_ran"):
-    st.session_state["rt_ran"] = True
-    answer, observation, evidence, trace, metrics = run_question(image_path, question, mode)
-else:
-    answer, observation, evidence, trace, metrics = run_question(image_path, question, mode)
+answer, observation, evidence, trace, metrics = run_question(image_path, question, mode)
 
-left, right = st.columns([5, 7], gap="large")
+left, right = st.columns([1, 1.62], gap="large")
 
 with left:
-    C.image_viewer(
+    C.image_plate(
         image_path,
         caption=Path(image_path).name,
         meta="512 × 512 · 合成影像" if uploaded is None else "已上传",
     )
     st.markdown("")
-    C.metrics_row(metrics)
+    C.stat_row(metrics)
 
 with right:
-    C.answer_card(answer, evidence)
-
-    col_a, col_b = st.columns([1, 1], gap="medium")
-    with col_a:
-        C.observation_card(observation)
-    with col_b:
-        C.retrieval_trace(trace)
-
-    C.evidence_list(evidence, answer.evidence_ids)
+    C.question_line(question)
+    C.answer_block(answer, evidence)
+    C.observation_block(observation)
+    C.trace_rows(trace)
+    C.reference_list(evidence, answer.evidence_ids)
 
 st.markdown("")
 st.markdown(
-    f"""
-    <div style="font-size:12px;color:{COLORS['text_mute']};text-align:center;
-                padding-top:18px;border-top:1px solid {COLORS['border']};">
+    """
+    <div style="font-size:12px;color:#8A94A2;text-align:center;
+                padding-top:20px;border-top:1px solid #E2E0DA;">
       RadTraceRAG · 面向医学影像问答的可追溯多模态 RAG ·
       演示数据仅用于界面预览，不构成任何诊断建议
     </div>

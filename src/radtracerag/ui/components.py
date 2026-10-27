@@ -1,13 +1,16 @@
 """界面组件。
 
-每个组件都只负责渲染，不做业务判断。数据来自 radtracerag.contracts。
+每个组件只负责渲染，不做业务判断。数据来自 radtracerag.contracts。
 
-两个坑值得记一下：
+排版参照的是放射科报告和论文：靠分割线分区，靠编号列表列证据，
+不堆卡片。这样一屏读下来就是一份「答案 + 它凭什么这么说」的文档。
 
-1. Streamlit 用 CommonMark 渲染 HTML，遇到空行就结束当前 HTML 块，后面全部
-   当成字面量显示。所以这里所有 HTML 片段都先 strip() 再拼接，块与块之间
-   不留空行。
-2. Streamlit 的 markdown 组件不放行 file:// 图片，图标要转成 data URI。
+两个 Streamlit 的坑值得记一下：
+
+1. HTML 块之间不能有空行。Streamlit 用 CommonMark 渲染 HTML，遇到空行就
+   结束当前 HTML 块，后面全部当字面量显示。所以所有片段先 strip() 再拼接。
+2. `file://` 图片不显示。markdown 组件不放行本地文件协议，图标和影像
+   都要转成 data URI。
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ import streamlit as st
 from radtracerag.contracts import Answer, Evidence, ImageObservation, RetrievalStep
 from radtracerag.ui.theme import COLORS
 
-_CITE = re.compile(r"\[(E\d+)\]")
+_CITE = re.compile(r"\[(\d+)\]")
 
 
 def _esc(text: str) -> str:
@@ -70,20 +73,18 @@ def topbar(logo: Path | None = None, subtitle: str = "TRACEABLE MULTIMODAL RAG")
     )
 
 
-# ---------------------------------------------------------------- 影像查看器
+# ---------------------------------------------------------------- 影像灯箱
 
 
-def image_viewer(image_path: Path | None, caption: str = "", meta: str = "") -> None:
-    """深底影像查看器，中间叠一个十字准星（呼应 logo）。"""
+def image_plate(image_path: Path | None, caption: str = "", meta: str = "") -> None:
+    """影像放在浅灰灯箱上，像摊在阅片灯上的胶片。"""
     uri = img_uri(image_path)
     if not uri:
         st.markdown(
             f"""
-            <div class="rt-viewer" style="min-height:260px;display:flex;
+            <div class="rt-plate" style="min-height:300px;display:flex;
                         align-items:center;justify-content:center;">
-              <span style="color:{COLORS['text_mute']};font-size:13px;">
-                等待上传影像
-              </span>
+              <span style="color:{COLORS['text_mute']};font-size:13px;">等待上传影像</span>
             </div>
             """,
             unsafe_allow_html=True,
@@ -92,12 +93,10 @@ def image_viewer(image_path: Path | None, caption: str = "", meta: str = "") -> 
 
     st.markdown(
         f"""
-        <div class="rt-viewer">
+        <div class="rt-plate">
           <img src="{uri}">
-          <div class="rt-crosshair-h"></div>
-          <div class="rt-crosshair-v"></div>
         </div>
-        <div class="rt-viewer-caption">
+        <div class="rt-plate-cap">
           <span>{_esc(caption)}</span>
           <span>{_esc(meta)}</span>
         </div>
@@ -106,109 +105,43 @@ def image_viewer(image_path: Path | None, caption: str = "", meta: str = "") -> 
     )
 
 
-# ---------------------------------------------------------------- 答案
+# ---------------------------------------------------------------- 问答
 
 
-def answer_card(answer: Answer, evidence: list[Evidence]) -> None:
-    """答案卡。答案里 [E1] 形式的引用会高亮，引用列表单列在下面。"""
+def question_line(question: str) -> None:
+    st.markdown(
+        f'<div class="rt-q"><b>问</b>　{_esc(question)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def answer_block(answer: Answer, evidence: list[Evidence]) -> None:
+    """答案段。引用编号用上标，脚注色和 logo 里的朱砂点一致。"""
     cited = set(answer.evidence_ids)
 
     def mark(match: re.Match) -> str:
-        eid = match.group(1)
-        color = COLORS["hit"] if eid in cited else COLORS["text_mute"]
-        return (
-            f'<span class="rt-answer-mark" style="border-bottom:2px solid {color}">'
-            f"{match.group(0)}</span>"
-        )
+        no = match.group(1)
+        cls = "rt-ref" if no in cited else "rt-ref-missed"
+        style = "" if no in cited else "color:#8A94A2;"
+        return f'<span class="{cls}" style="{style}">[{no}]</span>'
 
     body = _CITE.sub(mark, _esc(answer.text))
-    chips = "".join(
-        f'<span class="rt-badge is-hit is-mono">{_esc(eid)}</span>'
-        for eid in answer.evidence_ids
-    )
-
-    st.markdown(
-        f"""
-        <div class="rt-card">
-          <div class="rt-card-head is-hit"><span class="rt-dot"></span>答案</div>
-          <div class="rt-answer">{body}</div>
-          <div class="rt-answer-cites">{chips}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<div class="rt-a"><b>答</b>　{body}</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------- 图像观察
 
 
-def observation_card(observation: ImageObservation | None) -> None:
+def observation_block(observation: ImageObservation | None) -> None:
     if observation is None:
         return
-    chips = "".join(
-        f'<span class="rt-badge is-dim">{_esc(e)}</span>' for e in observation.entities
-    )
     st.markdown(
         f"""
-        <div class="rt-card">
-          <div class="rt-card-head is-scan"><span class="rt-dot"></span>图像观察</div>
-          <div style="font-size:14.5px;line-height:1.6;color:{COLORS['text']};">
+        <div class="rt-section">
+          <div class="rt-section-head">图像观察</div>
+          <div style="font-size:15px;line-height:1.8;color:{COLORS['text_dim']};">
             {_esc(observation.text)}
           </div>
-          <div class="rt-answer-cites">{chips}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# ---------------------------------------------------------------- 证据
-
-
-def evidence_list(evidence: list[Evidence], cited_ids: tuple[str, ...] = ()) -> None:
-    """证据卡列表。被答案引用的证据高亮，没被引用的压暗。"""
-    cited = set(cited_ids)
-    if not evidence:
-        st.markdown(
-            f"""
-            <div class="rt-card">
-              <div class="rt-card-head is-hit"><span class="rt-dot"></span>证据</div>
-              <div style="color:{COLORS['text_mute']};font-size:13.5px;">
-                没有检索到证据
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        return
-
-    blocks = []
-    for ev in evidence:
-        hit = ev.evidence_id in cited
-        cls = "rt-evidence" if hit else "rt-evidence is-missed"
-        mark = (
-            '<span class="rt-badge is-hit">已引用</span>'
-            if hit
-            else '<span class="rt-badge is-dim">未引用</span>'
-        )
-        blocks.append(
-            f"""
-            <div class="{cls}">
-              <div class="rt-evidence-head">
-                <span class="rt-evidence-id">{_esc(ev.evidence_id)}</span>
-                {mark}
-              </div>
-              <div class="rt-evidence-text">{_esc(ev.content)}</div>
-              <div class="rt-evidence-source">来源：{_esc(ev.source)}</div>
-            </div>
-            """
-        )
-
-    st.markdown(
-        f"""
-        <div class="rt-card">
-          <div class="rt-card-head is-hit"><span class="rt-dot"></span>证据</div>
-          {_join(blocks)}
         </div>
         """,
         unsafe_allow_html=True,
@@ -218,40 +151,83 @@ def evidence_list(evidence: list[Evidence], cited_ids: tuple[str, ...] = ()) -> 
 # ---------------------------------------------------------------- 检索轨迹
 
 
-def retrieval_trace(steps: list[RetrievalStep]) -> None:
-    """检索轨迹时间线。这是「答案怎么来的」的展开。"""
+def trace_rows(steps: list[RetrievalStep]) -> None:
+    """轨迹用表格式行：阶段 | 说明 | 条数与耗时。"""
     if not steps:
         return
-    blocks = []
+    rows = []
     for step in steps:
         is_hit = step.stage in {"命中", "证据", "evidence"}
-        cls = "rt-step is-hit" if is_hit else "rt-step"
+        cls = "rt-row is-hit" if is_hit else "rt-row"
         meta = []
         if step.count:
             meta.append(f"{step.count} 条")
         if step.elapsed_ms:
             meta.append(f"{step.elapsed_ms} ms")
-        meta_html = (
-            f'<div class="rt-step-meta">{" · ".join(_esc(m) for m in meta)}</div>'
-            if meta
-            else ""
-        )
-        blocks.append(
+        rows.append(
             f"""
             <div class="{cls}">
-              <span class="rt-dot"></span>
-              <div class="rt-step-title">{_esc(step.stage)}</div>
-              <div class="rt-step-detail">{_esc(step.detail)}</div>
-              {meta_html}
+              <div class="rt-row-key">{_esc(step.stage)}</div>
+              <div class="rt-row-val">{_esc(step.detail)}</div>
+              <div class="rt-row-meta">{_esc(" · ".join(meta))}</div>
+            </div>
+            """
+        )
+    st.markdown(
+        f"""
+        <div class="rt-section">
+          <div class="rt-section-head">检索轨迹</div>
+          <div class="rt-rows">{_join(rows)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------- 证据
+
+
+def reference_list(evidence: list[Evidence], cited_ids: tuple[str, ...] = ()) -> None:
+    """证据按引用编号列，形态和论文参考文献一致。
+
+    没有检索到证据时也显示这一节——「没证据」本身是要被看见的结果。
+    """
+    if not evidence:
+        st.markdown(
+            f"""
+            <div class="rt-section">
+              <div class="rt-section-head is-accent">证据</div>
+              <div style="font-size:14px;color:{COLORS['text_mute']};">
+                没有检索到证据，答案没有可回溯的支撑。
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    cited = set(cited_ids)
+    items = []
+    for ev in evidence:
+        hit = ev.evidence_id in cited
+        cls = "rt-ref-item" if hit else "rt-ref-item is-missed"
+        items.append(
+            f"""
+            <div class="{cls}">
+              <div class="rt-ref-no">{_esc(ev.evidence_id)}</div>
+              <div class="rt-ref-body">
+                <p>{_esc(ev.content)}</p>
+                <div class="rt-ref-src">{_esc(ev.source)}</div>
+              </div>
             </div>
             """
         )
 
     st.markdown(
         f"""
-        <div class="rt-card">
-          <div class="rt-card-head"><span class="rt-dot"></span>检索轨迹</div>
-          <div class="rt-trace">{_join(blocks)}</div>
+        <div class="rt-section">
+          <div class="rt-section-head is-accent">证据</div>
+          <div class="rt-refs">{_join(items)}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -261,16 +237,16 @@ def retrieval_trace(steps: list[RetrievalStep]) -> None:
 # ---------------------------------------------------------------- 指标
 
 
-def metrics_row(items: list[tuple[str, str, str]]) -> None:
-    """指标行。items = [(值, 标签, 颜色), ...]"""
+def stat_row(items: list[tuple[str, str]]) -> None:
+    """一行细排指标。items = [(值, 标签), ...]"""
     blocks = []
-    for value, label, color in items:
+    for value, label in items:
         blocks.append(
             f"""
-            <div class="rt-metric">
-              <div class="rt-metric-value" style="color:{color}">{_esc(value)}</div>
-              <div class="rt-metric-label">{_esc(label)}</div>
+            <div>
+              <div class="rt-stat-v">{_esc(value)}</div>
+              <div class="rt-stat-l">{_esc(label)}</div>
             </div>
             """
         )
-    st.markdown(f'<div class="rt-metrics">{_join(blocks)}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="rt-stats">{_join(blocks)}</div>', unsafe_allow_html=True)

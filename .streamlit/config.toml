@@ -1,15 +1,15 @@
 # Streamlit 主题配置。
 #
-# 这里的值会被 Streamlit 注入成 CSS 变量（--primary-color 等）。
-# 比在 CSS 里覆盖可靠：内部组件（radio / slider / checkbox）的颜色是从这里来的，
-# 硬改 CSS 容易漏。
+# 界面走纸面路线：米白纸底、墨色字、朱砂强调。
+# 这里的值会被 Streamlit 注入成 CSS 变量（--primary-color 等），
+# 比在 CSS 里硬改可靠：内部组件（radio / slider）的颜色从这里派生。
 
 [theme]
-base = "dark"
-primaryColor = "#38BDF8"
-backgroundColor = "#0A0F18"
-secondaryBackgroundColor = "#111927"
-textColor = "#E6EDF7"
+base = "light"
+primaryColor = "#C0472B"
+backgroundColor = "#FBFAF7"
+secondaryBackgroundColor = "#F1EFE9"
+textColor = "#16202E"
 font = "sans serif"
 
 [server]

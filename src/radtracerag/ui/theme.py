@@ -1,13 +1,15 @@
 """RadTraceRAG 界面设计 token 与主题。
 
-颜色语义和 logo 严格一致，这是整套设计语言的核心：
+视觉基调是**纸面**：米白纸底、墨色字、朱砂红强调。参照物不是 SaaS 控制台，
+而是放射科报告和学术论文——因为「可追溯」这件事在纸面上就是引用制度：
+答案带脚注号，证据按编号列在下方，每条写明来源。
 
-    青（trace）  检索路径、轨迹、系统动作 —— 对应 logo 里被点亮的那段弧
-    琥珀（hit）  命中的证据、引用          —— 对应 logo 里的琥珀点
-    灰蓝（scan） 图像观察、看片视野         —— 对应 logo 里的中心准星
+配色只有三色加中性色，logo 和界面共用一套：
 
-界面默认深色。医学影像是灰阶的，深底上对比度和细节都更好；看片软件（PACS）
-也是这个惯例，不是为了好看而选的。
+    墨色  #16202E   文字、结构、影像切片
+    朱砂  #C0472B   引用编号、命中的那一点、强调
+    米白  #FBFAF7   纸
+    藏青  #234A6E   次级强调
 """
 
 from __future__ import annotations
@@ -19,36 +21,36 @@ import streamlit as st
 # ---------------------------------------------------------------- 设计 token
 
 COLORS = {
-    "bg": "#0A0F18",
-    "surface": "#111927",
-    "surface_2": "#0E1622",
-    "border": "#1F2C3D",
-    "border_2": "#2A3A4F",
-    "text": "#E6EDF7",
-    "text_dim": "#93A7C0",
-    "text_mute": "#61748D",
-    # 检索 / 轨迹
-    "trace": "#38BDF8",
-    "trace_2": "#22D3EE",
-    "trace_3": "#8B93F8",
-    # 命中的证据
-    "hit": "#FBBF24",
-    "hit_2": "#F59E0B",
-    # 图像观察
-    "scan": "#7FA0C0",
-    "ok": "#34D399",
-    "bad": "#F87171",
-    "warn": "#FB923C",
+    # 纸与墨
+    "bg": "#FBFAF7",
+    "surface": "#F1EFE9",
+    "surface_2": "#FFFFFF",
+    "border": "#E2E0DA",
+    "border_2": "#D3D8DF",
+    "text": "#16202E",
+    "text_dim": "#3C4654",
+    "text_mute": "#8A94A2",
+    # 强调
+    "accent": "#C0472B",
+    "accent_soft": "#E8B9AC",
+    "navy": "#234A6E",
+    # 状态
+    "ok": "#2E7D5B",
+    "bad": "#B3261E",
 }
 
-FONT_STACK = (
-    "'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', "
-    "'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif"
+SERIF_STACK = (
+    "'Songti SC', 'STSong', 'Source Han Serif SC', 'Noto Serif CJK SC', "
+    "Georgia, 'Times New Roman', serif"
+)
+
+SANS_STACK = (
+    "'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', "
+    "'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif"
 )
 
 MONO_STACK = (
-    "'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', "
-    "'Liberation Mono', 'Courier New', monospace"
+    "'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', 'Courier New', monospace"
 )
 
 # ---------------------------------------------------------------- CSS
@@ -64,196 +66,156 @@ CSS = """
   --rt-text: $text;
   --rt-text-dim: $text_dim;
   --rt-text-mute: $text_mute;
-  --rt-trace: $trace;
-  --rt-trace-2: $trace_2;
-  --rt-trace-3: $trace_3;
-  --rt-hit: $hit;
-  --rt-hit-2: $hit_2;
-  --rt-scan: $scan;
-  --rt-ok: $ok;
-  --rt-bad: $bad;
-  --rt-font: $font;
+  --rt-accent: $accent;
+  --rt-accent-soft: $accent_soft;
+  --rt-navy: $navy;
+  --rt-sans: $sans;
+  --rt-serif: $serif;
   --rt-mono: $mono;
 }
 
 /* ---------- 底色与字体 ---------- */
 .stApp { background: var(--rt-bg); }
 [data-testid="stAppViewContainer"] {
-  --primary-color: $trace;
-  --primary-color-hover: $trace_2;
-  --primary-color-active: #0EA5E9;
+  --primary-color: $accent;
+  --primary-color-hover: #A93C23;
+  --primary-color-active: #8E3019;
   --background-color: var(--rt-bg);
-  --secondary-background-color: var(--rt-surface-2);
+  --secondary-background-color: var(--rt-surface);
   --text-color: var(--rt-text);
 }
-html, body, [class*="css"], [data-testid="stMarkdownContainer"] p, h1, h2, h3, h4 {
-  font-family: var(--rt-font);
+html, body, [class*="css"] { font-family: var(--rt-sans); color: var(--rt-text); }
+[data-testid="stMarkdownContainer"] p { color: var(--rt-text); line-height: 1.75; }
+h1, h2, h3, h4, [data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdownContainer"] h2 {
+  font-family: var(--rt-serif);
+  letter-spacing: -0.005em;
   color: var(--rt-text);
 }
 [data-testid="stHeader"] { background: transparent; }
-[data-testid="stToolbar"] { right: 0; }
-.block-container { padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1440px; }
+.block-container { padding-top: 1.6rem; padding-bottom: 3rem; max-width: 1400px; }
 
-[data-testid="stSidebar"] {
-  background: #0C131F;
-  border-right: 1px solid var(--rt-border);
-}
+/* 侧边栏也用纸白，让 logo 图标融进页面（图标底色是米白），
+   用一条右边线区分左右两栏 */
+[data-testid="stSidebar"] { background: var(--rt-bg); border-right: 1px solid var(--rt-border); }
 [data-testid="stSidebarContent"] { padding-top: 1.4rem; }
-[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
-  letter-spacing: -0.01em;
-}
+[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] strong { font-family: var(--rt-serif); }
 
 /* ---------- 顶栏 ---------- */
 .rt-topbar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 0 4px 18px 4px; margin-bottom: 18px;
-  border-bottom: 1px solid var(--rt-border);
+  display: flex; align-items: center; gap: 15px;
+  padding: 0 2px 15px 2px; margin-bottom: 26px;
+  border-bottom: 2px solid var(--rt-text);
 }
-.rt-topbar img { height: 44px; border-radius: 10px; }
-.rt-topbar-title { font-size: 19px; font-weight: 650; letter-spacing: -0.02em; }
-.rt-topbar-sub { font-size: 12.5px; color: var(--rt-text-mute); letter-spacing: 0.14em; text-transform: uppercase; }
+.rt-topbar img { height: 40px; border-radius: 5px; }
+.rt-topbar-title { font-family: var(--rt-serif); font-size: 19px; font-weight: 600; }
+.rt-topbar-sub { font-size: 10.5px; color: var(--rt-text-mute); letter-spacing: 0.2em; }
 .rt-topbar-spacer { flex: 1; }
 
-/* ---------- 卡片 ---------- */
-.rt-card {
-  background: var(--rt-surface);
-  border: 1px solid var(--rt-border);
-  border-radius: 14px;
-  padding: 16px 18px;
-  margin-bottom: 12px;
+/* ---------- 分区：靠分割线而不是卡片 ---------- */
+/* 用 padding-top 而不是 margin-top：Streamlit 的 vertical block 会吃掉相邻
+   元素的外边距，margin 撑不开间距。
+   注意别写 :first-child 清零——每个 section 都是它所在容器的首个子元素，
+   那样会把所有 section 的上间距都清掉。 */
+.rt-section { padding-top: 30px; }
+.rt-section-head {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.16em;
+  color: var(--rt-text-mute); margin-bottom: 13px;
 }
-.rt-card-head {
-  display: flex; align-items: center; gap: 9px;
-  font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
-  color: var(--rt-text-mute); margin-bottom: 12px;
-}
-.rt-card-head .rt-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--rt-trace); }
-.rt-card-head.is-hit .rt-dot { background: var(--rt-hit); }
-.rt-card-head.is-scan .rt-dot { background: var(--rt-scan); }
+.rt-section-head::after { content: ""; flex: 1; height: 1px; background: var(--rt-border); }
+.rt-section-head.is-accent { color: var(--rt-accent); }
 
-/* ---------- 答案 ---------- */
-.rt-answer {
-  font-size: 19px; line-height: 1.62; color: var(--rt-text);
-  letter-spacing: -0.005em;
-}
-.rt-answer-mark {
-  background: linear-gradient(180deg, transparent 62%, rgba(56,189,248,0.28) 62%);
-  padding: 0 2px;
-}
-.rt-answer-cites { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 6px; }
-
-/* ---------- 徽章 ---------- */
-.rt-badge {
-  display: inline-block; padding: 3px 9px; border-radius: 999px;
-  font-size: 11.5px; font-weight: 600; line-height: 1.5;
-  border: 1px solid var(--rt-border-2); color: var(--rt-text-dim);
-  background: var(--rt-surface-2);
-}
-.rt-badge.is-hit { color: #1A1206; background: var(--rt-hit); border-color: var(--rt-hit); }
-.rt-badge.is-trace { color: #05121E; background: var(--rt-trace); border-color: var(--rt-trace); }
-.rt-badge.is-mono { font-family: var(--rt-mono); font-weight: 500; letter-spacing: -0.01em; }
-.rt-badge.is-ok { color: #052E20; background: var(--rt-ok); border-color: var(--rt-ok); }
-.rt-badge.is-bad { color: #2B0A0A; background: var(--rt-bad); border-color: var(--rt-bad); }
-.rt-badge.is-dim { opacity: 0.72; }
-
-/* ---------- 证据卡 ---------- */
-.rt-evidence {
-  background: var(--rt-surface-2);
-  border: 1px solid var(--rt-border);
-  border-left: 3px solid var(--rt-hit);
-  border-radius: 10px;
-  padding: 12px 14px;
-  margin-bottom: 9px;
-}
-.rt-evidence.is-missed { border-left-color: var(--rt-border-2); opacity: 0.62; }
-.rt-evidence-head {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  margin-bottom: 7px;
-}
-.rt-evidence-id {
-  font-family: var(--rt-mono); font-size: 12px; font-weight: 600;
-  color: var(--rt-hit); letter-spacing: -0.01em;
-}
-.rt-evidence.is-missed .rt-evidence-id { color: var(--rt-text-mute); }
-.rt-evidence-text { font-size: 14.5px; line-height: 1.58; color: var(--rt-text); }
-.rt-evidence-source { font-size: 12px; color: var(--rt-text-mute); margin-top: 8px; }
-
-/* ---------- 检索轨迹 ---------- */
-.rt-trace { position: relative; padding-left: 20px; }
-.rt-trace::before {
-  content: ""; position: absolute; left: 4px; top: 8px; bottom: 10px; width: 2px;
-  background: linear-gradient(180deg, var(--rt-trace-2), var(--rt-trace-3));
-  opacity: 0.45;
-}
-.rt-step { position: relative; margin-bottom: 15px; }
-.rt-step:last-child { margin-bottom: 0; }
-.rt-dot {
-  position: absolute; left: -20px; top: 4px; width: 10px; height: 10px;
-  border-radius: 50%; background: var(--rt-trace);
-  box-shadow: 0 0 0 4px rgba(56,189,248,0.14);
-}
-.rt-step.is-hit .rt-dot { background: var(--rt-hit); box-shadow: 0 0 0 4px rgba(251,191,36,0.14); }
-.rt-step-title { font-size: 13.5px; font-weight: 600; color: var(--rt-text); }
-.rt-step-detail { font-size: 13px; color: var(--rt-text-dim); margin-top: 3px; line-height: 1.5; }
-.rt-step-meta { font-size: 11.5px; color: var(--rt-text-mute); margin-top: 4px; font-family: var(--rt-mono); }
-
-/* ---------- 影像查看器 ---------- */
-.rt-viewer {
-  position: relative; background: #04070C;
-  border: 1px solid var(--rt-border); border-radius: 14px;
-  padding: 12px; overflow: hidden;
-}
-.rt-viewer img { width: 100%; display: block; border-radius: 8px; }
-.rt-crosshair-h, .rt-crosshair-v {
-  position: absolute; background: rgba(127,160,192,0.34); pointer-events: none;
-}
-.rt-crosshair-h { left: 12px; right: 12px; top: 50%; height: 1px; }
-.rt-crosshair-v { top: 12px; bottom: 12px; left: 50%; width: 1px; }
-.rt-viewer-caption {
-  display: flex; justify-content: space-between; align-items: center;
-  font-size: 11.5px; color: var(--rt-text-mute); margin-top: 9px;
-  font-family: var(--rt-mono);
+/* ---------- 问答 ---------- */
+.rt-q { font-size: 19px; line-height: 1.6; margin-bottom: 20px; }
+.rt-q b { font-weight: 600; }
+.rt-a { font-size: 17px; line-height: 1.85; }
+.rt-a b { font-weight: 600; }
+.rt-ref {
+  color: var(--rt-accent); font-weight: 600; font-size: 11px;
+  margin-left: 1px; white-space: nowrap; vertical-align: super;
 }
 
-/* ---------- 指标 ---------- */
-.rt-metrics { display: flex; gap: 10px; flex-wrap: wrap; }
-.rt-metric {
-  flex: 1 1 120px; background: var(--rt-surface-2);
-  border: 1px solid var(--rt-border); border-radius: 10px; padding: 10px 12px;
+/* ---------- 影像灯箱 ---------- */
+.rt-plate { background: var(--rt-surface); padding: 16px; border-radius: 4px; }
+.rt-plate img { width: 100%; display: block; border-radius: 2px; }
+.rt-plate-cap {
+  display: flex; justify-content: space-between; gap: 12px;
+  font-size: 11px; color: var(--rt-text-mute); margin-top: 10px;
 }
-.rt-metric-value { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
-.rt-metric-label { font-size: 11.5px; color: var(--rt-text-mute); margin-top: 2px; }
+
+/* ---------- 轨迹行 ---------- */
+.rt-rows { font-size: 14px; }
+.rt-row {
+  display: grid; grid-template-columns: 96px 1fr auto; gap: 16px;
+  align-items: baseline; padding: 8px 0;
+  border-bottom: 1px dotted var(--rt-border);
+}
+.rt-row:last-child { border-bottom: 0; }
+.rt-row-key { font-weight: 600; }
+.rt-row-val { color: var(--rt-text-dim); }
+.rt-row-meta { color: var(--rt-text-mute); font-size: 12px; white-space: nowrap; }
+.rt-row.is-hit .rt-row-key { color: var(--rt-accent); }
+
+/* ---------- 证据列表 ---------- */
+.rt-refs { font-size: 14.5px; }
+.rt-ref-item {
+  display: grid; grid-template-columns: 38px 1fr; gap: 14px;
+  padding: 12px 0; border-top: 1px solid var(--rt-border);
+}
+.rt-ref-item:first-child { border-top: 2px solid var(--rt-text); }
+.rt-ref-item.is-missed { opacity: 0.5; }
+.rt-ref-no { color: var(--rt-accent); font-weight: 600; font-size: 13px; }
+.rt-ref-item.is-missed .rt-ref-no { color: var(--rt-text-mute); }
+.rt-ref-body p { margin: 0 0 4px 0; line-height: 1.7; }
+.rt-ref-src { font-size: 11.5px; color: var(--rt-text-mute); }
+
+/* ---------- 指标（细排，不做卡片块） ---------- */
+.rt-stats { display: flex; gap: 26px; flex-wrap: wrap; }
+.rt-stat-v { font-family: var(--rt-serif); font-size: 21px; font-weight: 600; }
+.rt-stat-l { font-size: 11px; color: var(--rt-text-mute); margin-top: 1px; }
 
 /* ---------- 对照组切换 ---------- */
-[data-testid="stRadio"] > div { gap: 6px; }
+[data-testid="stRadio"] > div { gap: 0; }
 [data-testid="stRadio"] label {
-  border: 1px solid var(--rt-border); border-radius: 9px;
-  padding: 6px 12px; background: var(--rt-surface-2);
+  border: 1px solid var(--rt-border-2); border-radius: 999px;
+  padding: 5px 14px; background: transparent; margin-right: 0;
   transition: all 0.15s ease;
 }
 [data-testid="stRadio"] label:has(input:checked) {
-  border-color: var(--rt-trace); background: rgba(56,189,248,0.10);
+  background: var(--rt-text); border-color: var(--rt-text);
 }
-[data-testid="stRadio"] label:hover { border-color: var(--rt-border-2); }
-[data-testid="stRadio"] input[type="radio"] { accent-color: var(--rt-trace); }
-[data-testid="stRadio"] input[type="radio"] + div { color: var(--rt-text); }
+[data-testid="stRadio"] label:has(input:checked) p { color: var(--rt-bg) !important; }
+[data-testid="stRadio"] label:hover { border-color: var(--rt-text-mute); }
+[data-testid="stRadio"] input[type="radio"] { accent-color: var(--rt-accent); }
+/* 药丸样式已经用底色区分选中态，原生圆点可以去掉，省出横向空间 */
+[data-testid="stRadio"] [data-baseweb="radio"] { display: none !important; }
 
-/* ---------- 滑块 ---------- */
-[data-testid="stSlider"] [role="slider"] {
-  background-color: var(--rt-trace) !important;
-  box-shadow: 0 0 0 4px rgba(56,189,248,0.16);
+/* ---------- 控件 ---------- */
+.stTextInput input, .stTextArea textarea {
+  background: var(--rt-surface-2) !important;
+  border: 1px solid var(--rt-border-2) !important;
+  border-radius: 3px !important;
+  color: var(--rt-text) !important;
+  font-family: var(--rt-sans) !important;
 }
-[data-testid="stSlider"] [data-baseweb="slider"] div[data-testid="stSliderTickBarMin"] {
-  background: var(--rt-trace) !important;
+.stTextInput input:focus, .stTextArea textarea:focus {
+  border-color: var(--rt-text) !important; box-shadow: none !important;
 }
-
-/* ---------- 上传区 ---------- */
+.stButton > button {
+  background: var(--rt-text); color: var(--rt-bg);
+  border: 1px solid var(--rt-text); border-radius: 3px;
+  font-weight: 600; width: 100%; letter-spacing: 0.04em;
+  transition: opacity 0.15s ease;
+}
+/* 按钮文字是 markdown 容器里的 p，会被上面的 p 颜色规则改成墨色，
+   墨字压在墨底上看不见，这里显式改回来。 */
+.stButton > button p,
+.stButton > button span { color: var(--rt-bg) !important; }
+.stButton > button:hover { opacity: 0.85; color: var(--rt-bg); }
 [data-testid="stFileUploader"] section {
-  background: var(--rt-surface-2); border: 1px dashed var(--rt-border-2); border-radius: 12px;
+  background: var(--rt-surface-2); border: 1px dashed var(--rt-border-2); border-radius: 3px;
 }
-/* Streamlit 的上传提示是英文，藏掉换成中文。
-   按钮里既有 icon 又有文字，还有多个并列 span，逐个匹配会漏。
-   干脆把整块文字压成 0，再在 button 上加一个 ::after。 */
 [data-testid="stFileUploaderDropzoneInstructions"] > * { visibility: hidden; height: 0; }
 [data-testid="stFileUploader"] button { color: var(--rt-text-dim) !important; }
 [data-testid="stFileUploader"] button,
@@ -262,52 +224,19 @@ html, body, [class*="css"], [data-testid="stMarkdownContainer"] p, h1, h2, h3, h
   content: "选择文件"; font-size: 13px !important; font-weight: 500;
 }
 [data-testid="stFileUploader"] small { color: var(--rt-text-mute) !important; }
-
-/* ---------- 窄屏堆叠 ---------- */
-@media (max-width: 1250px) {
-  [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
-  [data-testid="stColumn"] { min-width: 100% !important; }
-}
-
-/* ---------- 控件 ---------- */
-.stTextInput input, .stTextArea textarea {
-  background: var(--rt-surface-2) !important;
-  border: 1px solid var(--rt-border-2) !important;
-  border-radius: 10px !important;
-  color: var(--rt-text) !important;
-}
-.stTextInput input:focus, .stTextArea textarea:focus {
-  border-color: var(--rt-trace) !important; box-shadow: 0 0 0 1px var(--rt-trace) !important;
-}
-.stButton > button {
-  background: linear-gradient(135deg, var(--rt-trace-2), var(--rt-trace));
-  color: #04121D; border: none; border-radius: 10px;
-  font-weight: 650; letter-spacing: -0.01em; width: 100%;
-  transition: filter 0.15s ease;
-}
-.stButton > button:hover { filter: brightness(1.08); color: #04121D; }
-.stDownloadButton > button {
-  background: var(--rt-surface-2); color: var(--rt-text-dim);
-  border: 1px solid var(--rt-border-2); border-radius: 10px; width: 100%;
-}
-[data-testid="stFileUploader"] section {
-  background: var(--rt-surface-2); border: 1px dashed var(--rt-border-2); border-radius: 12px;
-}
-[data-testid="stExpander"] {
-  border: 1px solid var(--rt-border); border-radius: 12px; background: var(--rt-surface);
-}
-[data-testid="stExpander"] summary { font-size: 13.5px; color: var(--rt-text-dim); }
-
-/* ---------- 杂项 ---------- */
-hr { border-color: var(--rt-border); }
+[data-testid="stSlider"] [role="slider"] { background-color: var(--rt-accent) !important; }
+[data-testid="stSlider"] [data-testid="stSliderTickBarMin"] { background: var(--rt-accent) !important; }
 [data-testid="stCaptionContainer"] { color: var(--rt-text-mute); }
-a { color: var(--rt-trace); }
+[data-testid="stExpander"] { border: 1px solid var(--rt-border); border-radius: 3px; }
+hr { border-color: var(--rt-border); }
+a { color: var(--rt-accent); }
 </style>
 """
 
 CSS = Template(CSS).safe_substitute(
     **COLORS,
-    font=FONT_STACK,
+    sans=SANS_STACK,
+    serif=SERIF_STACK,
     mono=MONO_STACK,
 )
 
@@ -315,11 +244,3 @@ CSS = Template(CSS).safe_substitute(
 def apply_theme() -> None:
     """把主题注入到当前 Streamlit 页面。"""
     st.markdown(CSS, unsafe_allow_html=True)
-    st.markdown(
-        """
-        <style>
-        .stApp [data-testid="stMetricValue"] { font-family: var(--rt-mono); }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )

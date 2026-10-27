@@ -15,7 +15,6 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 from radtracerag.contracts import Answer, Evidence, ImageObservation, RetrievalStep
-from radtracerag.ui.theme import COLORS
 
 ASSETS = Path(__file__).resolve().parents[3] / "assets"
 
@@ -50,18 +49,18 @@ MODES = {
                 elapsed_ms=620,
             ),
         ],
-        "metrics": [("0", "引用证据", COLORS["text_mute"]), ("1", "模型调用", COLORS["text"])],
+        "metrics": [("0", "引用证据"), ("1", "模型调用")],
     },
     "B · 向量 RAG": {
         "label": "向量 RAG",
         "desc": "LightRAG naive 模式，纯文本向量检索",
         "answer": Answer(
             text=(
-                "图中主要器官是肝脏，位于右上腹 [E1]。肝脏承担代谢与解毒、合成白蛋白"
-                "与凝血因子，并分泌胆汁参与脂肪消化 [E1]。"
-                "同时可见腹腔少量低密度积液，常见于多种病因，不能仅凭单张图定性 [E3]。"
+                "图中主要器官是肝脏，位于右上腹 [1]。肝脏承担代谢与解毒、合成白蛋白"
+                "与凝血因子，并分泌胆汁参与脂肪消化 [1]。"
+                "同时可见腹腔少量低密度积液，常见于多种病因，不能仅凭单张图定性 [3]。"
             ),
-            evidence_ids=("E1", "E3"),
+            evidence_ids=("1", "3"),
         ),
         "observation": ImageObservation(
             text=(
@@ -72,7 +71,7 @@ MODES = {
         ),
         "evidence": [
             Evidence(
-                evidence_id="E1",
+                evidence_id="1",
                 content=(
                     "肝是人体最大的腺体，位于右季肋区。功能包括糖异生、糖原储存、"
                     "尿素合成与氨解毒、胆汁分泌，以及合成白蛋白、凝血因子等血浆蛋白。"
@@ -80,7 +79,7 @@ MODES = {
                 source="SLAKE knowledge_base · 肝脏条目",
             ),
             Evidence(
-                evidence_id="E2",
+                evidence_id="2",
                 content=(
                     "胆汁由肝细胞分泌、储存在胆囊，经胆总管进入十二指肠，"
                     "参与脂肪的乳化与脂溶性维生素吸收。"
@@ -88,7 +87,7 @@ MODES = {
                 source="SLAKE knowledge_base · 胆汁条目",
             ),
             Evidence(
-                evidence_id="E3",
+                evidence_id="3",
                 content=(
                     "腹腔积液指腹腔内超出正常量的游离液体，可见于肝硬化、心衰、"
                     "结核性腹膜炎、胰腺炎等多种情况，影像表现相似，"
@@ -97,7 +96,7 @@ MODES = {
                 source="SLAKE knowledge_base · 腹水条目",
             ),
             Evidence(
-                evidence_id="E4",
+                evidence_id="4",
                 content=(
                     "脾位于左季肋区，质地脆，被膜下出血易破裂，"
                     "是人体最大的淋巴器官。"
@@ -124,7 +123,7 @@ MODES = {
             ),
             RetrievalStep(
                 stage="命中",
-                detail="E1、E3 进入答案上下文，E2、E4 落榜",
+                detail="1、3 进入答案上下文，2、4 落榜",
                 elapsed_ms=12,
                 count=2,
             ),
@@ -135,9 +134,9 @@ MODES = {
             ),
         ],
         "metrics": [
-            ("2", "引用证据", COLORS["text"]),
-            ("4", "候选事实", COLORS["text_dim"]),
-            ("3.6", "总耗时 s", COLORS["text_dim"]),
+            ("2", "引用证据"),
+            ("4", "候选事实"),
+            ("3.6", "总耗时 s"),
         ],
     },
     "C · 图增强 RAG": {
@@ -145,12 +144,12 @@ MODES = {
         "desc": "LightRAG mix 模式，图关系 + 向量联合检索",
         "answer": Answer(
             text=(
-                "图中主要器官是肝脏，位于右上腹 [E1]。肝脏承担代谢与解毒、合成白蛋白"
-                "与凝血因子，并分泌胆汁参与脂肪消化 [E1][E2]。"
-                "同时可见腹腔少量低密度积液，常见于多种病因，不能仅凭单张图定性 [E3]。"
-                "脾区未见明显异常 [E4]。"
+                "图中主要器官是肝脏，位于右上腹 [1]。肝脏承担代谢与解毒、合成白蛋白"
+                "与凝血因子，并分泌胆汁参与脂肪消化 [1][2]。"
+                "同时可见腹腔少量低密度积液，常见于多种病因，不能仅凭单张图定性 [3]。"
+                "脾区未见明显异常 [4]。"
             ),
-            evidence_ids=("E1", "E2", "E3", "E4"),
+            evidence_ids=("1", "2", "3", "4"),
         ),
         "observation": ImageObservation(
             text=(
@@ -161,7 +160,7 @@ MODES = {
         ),
         "evidence": [
             Evidence(
-                evidence_id="E1",
+                evidence_id="1",
                 content=(
                     "肝是人体最大的腺体，位于右季肋区。功能包括糖异生、糖原储存、"
                     "尿素合成与氨解毒、胆汁分泌，以及合成白蛋白、凝血因子等血浆蛋白。"
@@ -169,7 +168,7 @@ MODES = {
                 source="SLAKE knowledge_base · 肝脏条目",
             ),
             Evidence(
-                evidence_id="E2",
+                evidence_id="2",
                 content=(
                     "胆汁由肝细胞分泌、储存在胆囊，经胆总管进入十二指肠，"
                     "参与脂肪的乳化与脂溶性维生素吸收。"
@@ -177,7 +176,7 @@ MODES = {
                 source="SLAKE knowledge_base · 胆汁条目",
             ),
             Evidence(
-                evidence_id="E3",
+                evidence_id="3",
                 content=(
                     "腹腔积液指腹腔内超出正常量的游离液体，可见于肝硬化、心衰、"
                     "结核性腹膜炎、胰腺炎等多种情况，影像表现相似，"
@@ -186,7 +185,7 @@ MODES = {
                 source="SLAKE knowledge_base · 腹水条目",
             ),
             Evidence(
-                evidence_id="E4",
+                evidence_id="4",
                 content=(
                     "脾位于左季肋区，质地脆，被膜下出血易破裂，"
                     "是人体最大的淋巴器官。"
@@ -230,9 +229,9 @@ MODES = {
             ),
         ],
         "metrics": [
-            ("4", "引用证据", COLORS["text"]),
-            ("8", "候选事实", COLORS["text_dim"]),
-            ("4.5", "总耗时 s", COLORS["text_dim"]),
+            ("4", "引用证据"),
+            ("8", "候选事实"),
+            ("4.5", "总耗时 s"),
         ],
     },
 }
@@ -246,7 +245,7 @@ class DemoCase:
     observation: ImageObservation
     evidence: list[Evidence]
     trace: list[RetrievalStep]
-    metrics: list[tuple[str, str, str]]
+    metrics: list[tuple[str, str]]
     desc: str
 
 
