@@ -1,6 +1,0 @@
-<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-  <!-- 一片影像，和一条从它指出去的线 -->
-  <rect x="12" y="26" width="56" height="60" rx="9" fill="currentColor"/>
-  <line x1="70" y1="42" x2="83" y2="29" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
-  <rect x="78" y="12" width="16" height="16" rx="3" fill="currentColor"/>
-</svg>

@@ -79,13 +79,8 @@ with st.sidebar:
         f"""
         <div style="display:flex;align-items:center;gap:11px;margin-bottom:22px;">
           <img src="{logo_uri}" style="height:36px;border-radius:5px;">
-          <div>
-            <div style="font-family:'Songti SC',Georgia,serif;font-size:16px;font-weight:600;">
-              RadTraceRAG
-            </div>
-            <div style="font-size:10px;color:#8A94A2;letter-spacing:0.2em;">
-              TRACEABLE MULTIMODAL RAG
-            </div>
+          <div style="font-family:'Songti SC',Georgia,serif;font-size:16px;font-weight:600;">
+            RadTraceRAG
           </div>
         </div>
         """,

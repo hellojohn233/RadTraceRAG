@@ -170,49 +170,41 @@ uv run radtracerag-ui
 | 侧边栏 / 顶栏图标 | `assets/png/logo-mark-128.png` |
 | 深色横版 | `assets/png/logo-lockup.png` |
 | 浅色横版（README、文档） | `assets/png/logo-lockup-light.png` |
+| 横版矢量（高分辨率） | `assets/logo/final/radtracerag-lockup.svg` |
+| 横版位图 2400px | `assets/logo/final/radtracerag-lockup-2400-{paper,white}.jpg` |
 
-logo 由 verge 生图平台产出，源图在 `~/Downloads/RadTraceRAG-*/`（含水印版），
-提示词归档在 `~/Downloads/提示词合集/44-47`。
+主标志是 **窗位**：像素值直方图 + 朱砂窗位框。
 
-主标志是 **R 与 T 共享笔画合成的几何符号**（墨色 R + 朱砂 T）。
-它不长得像医学影像——logo 不需要长得像它服务的东西。
-按三条硬判据筛过：缩到 32px 还认得出、转纯黑单色仍然成立、跟衬线字标并排不打架。
+直方图是医学影像里最核心的那一步——调窗宽窗位决定一段灰阶怎么显示成图像，
+朱砂框住的那一段就是当前看得见的部分。它来自这个项目自己的元素（合成影像就是
+按窗宽窗位渲染的），又不是看片、靶心、胶片那类烂俗医疗图标。
 
-| 用途 | 文件 |
-|---|---|
-| 页面图标 | `assets/png/logo-mark-favicon-180.png` |
-| 侧边栏 / 顶栏 | `assets/png/logo-mark-128.png` |
-| 横版（深/浅） | `assets/png/logo-lockup.png`、`logo-lockup-light.png` |
-| 备选方向 | `assets/png/logo-mark-alt-R-*`、`logo-mark-alt-node-*` |
-| 纯字标 | `assets/png/wordmark-1..4.png` |
+朱砂不是装饰：界面里「命中」那一步、答案里的引用编号都是同一个朱砂，
+标志里的框和界面里的引用是同一个角色。
 
-重新导出：
+三条硬判据都过了：缩到 16px 仍认得出、转纯黑单色仍然成立、跟 Georgia 衬线字标并排不打架。
+
+字标是 Georgia Bold 的真实轮廓转成的 path（`assets/make_lockup_svg.py`），
+不依赖字体文件，任何环境打开都一致。
 
 ```bash
-python assets/crop_logo.py <源图> assets/png logo-mark       # 裁方 + 各尺寸
-python assets/make_lockup.py assets/png/logo-mark-512.png assets/png/logo-lockup.png dark
-python assets/make_wordmark.py assets/png                     # 纯字标四版
-python assets/review_board.py /tmp/board.png A=图1.png B=图2.png   # 候选评审板
+python assets/make_lockup_svg.py         # 生成横版矢量（无副标）
+python assets/export_final_logo.py        # 导出 2400px PNG / JPEG（纸白底 + 纯白底）
+python assets/install_logo.py             # 换掉 assets/png/ 里的既有资产位
+python assets/make_logo_set.py           # 重建候选集 svg + png + showcase
+python assets/sheet.py /tmp/sheet.png 01=/path/a.png 02=/path/b.png   # 评审板
 ```
 
-### 候选集（未定稿）
+### 候选集（设计记录）
 
-上表仍是 AI 生图那版。新的候选集在 `assets/logo/`：
+`assets/logo/` 保留了这一轮的全部候选，9 个方向分三派：
 
-- **影像派**（取自本项目自己的元素）：`01-window-level` 窗宽窗位、
+- **影像派**（取自本项目自己的元素）：`01-window-level` 窗位（**已定稿**）、
   `02-lesion-roi` 阅片角标、`03-image-to-trace` 影像到命中的路径、
   `04-retrieval-trace` 检索轨迹、`05-voxel-mark` 像素矩阵
 - **字标派**（承接报告与论文的排版语言）：`06-monogram-r`、`07-rt-ligature`、
   `08-citation-mark`
 - **符号派**：`09-trace-spiral`
 
-每个候选有 svg（`currentColor` + 朱砂强调）、1024/512/256/64/32/16 的透明底 png、
-横版 lockup，`assets/logo/showcase.html` 是自包含的对比页。
-
-```bash
-python assets/make_logo_set.py          # 生成 svg + png + showcase
-python assets/export_logo_sizes.py       # 各尺寸导出 + lockup
-python assets/sheet.py /tmp/sheet.png 01=/path/a.png 02=/path/b.png   # 评审板
-```
-
-定稿后要把本节资源表整体替换为新资产，并更新 UI 顶栏、侧边栏和 favicon。
+每个候选有 svg（`currentColor` + 朱砂强调）、1024/512/256/64/32/16 的透明底 png，
+`assets/logo/showcase.html` 是自包含的对比页。

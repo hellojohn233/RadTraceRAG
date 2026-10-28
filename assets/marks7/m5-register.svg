@@ -1,8 +1,0 @@
-<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-  <!-- 对位：两个标记夹住一个目标 -->
-  <g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round">
-    <path d="M 16 42 L 16 16 L 42 16"/>
-    <path d="M 84 60 L 84 84 L 62 84"/>
-  </g>
-  <rect x="42" y="44" width="14" height="14" rx="2.5" fill="#C0472B"/>
-</svg>

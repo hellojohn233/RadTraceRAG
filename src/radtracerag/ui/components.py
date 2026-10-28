@@ -53,7 +53,7 @@ def img_uri(path: Path | str | None) -> str:
 # ---------------------------------------------------------------- 顶栏
 
 
-def topbar(logo: Path | None = None, subtitle: str = "TRACEABLE MULTIMODAL RAG") -> None:
+def topbar(logo: Path | None = None) -> None:
     logo_html = ""
     uri = img_uri(logo)
     if uri:
@@ -62,10 +62,7 @@ def topbar(logo: Path | None = None, subtitle: str = "TRACEABLE MULTIMODAL RAG")
         f"""
         <div class="rt-topbar">
           {logo_html}
-          <div>
-            <div class="rt-topbar-title">RadTraceRAG</div>
-            <div class="rt-topbar-sub">{_esc(subtitle)}</div>
-          </div>
+          <div class="rt-topbar-title">RadTraceRAG</div>
           <div class="rt-topbar-spacer"></div>
         </div>
         """,

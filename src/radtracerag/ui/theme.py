@@ -109,7 +109,6 @@ h1, h2, h3, h4, [data-testid="stMarkdownContainer"] h1, [data-testid="stMarkdown
 }
 .rt-topbar img { height: 40px; border-radius: 5px; }
 .rt-topbar-title { font-family: var(--rt-serif); font-size: 19px; font-weight: 600; }
-.rt-topbar-sub { font-size: 10.5px; color: var(--rt-text-mute); letter-spacing: 0.2em; }
 .rt-topbar-spacer { flex: 1; }
 
 /* ---------- 分区：靠分割线而不是卡片 ---------- */

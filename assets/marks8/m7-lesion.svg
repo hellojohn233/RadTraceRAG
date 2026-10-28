@@ -1,7 +1,0 @@
-<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-  <!-- 圈出来的病灶，和指向证据的引线 -->
-  <circle cx="42" cy="56" r="23" fill="none" stroke="currentColor" stroke-width="3.4"/>
-  <circle cx="42" cy="56" r="5.5" fill="#C0472B"/>
-  <line x1="61" y1="43" x2="77" y2="29" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>
-  <rect x="76" y="14" width="15" height="15" rx="3" fill="currentColor"/>
-</svg>

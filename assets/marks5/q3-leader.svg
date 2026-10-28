@@ -1,6 +1,0 @@
-<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-  <!-- 实点 + 折线引出 + 方块端点 -->
-  <circle cx="24" cy="74" r="7.5" fill="currentColor"/>
-  <path d="M 29 69 L 52 48 L 74 48" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="72" y="40" width="16" height="16" rx="2.5" fill="currentColor"/>
-</svg>
