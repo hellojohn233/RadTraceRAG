@@ -77,9 +77,9 @@ with st.sidebar:
     logo_uri = C.img_uri(ASSETS / "png" / "logo-mark-128.png")
     st.markdown(
         f"""
-        <div style="display:flex;align-items:center;gap:11px;margin-bottom:22px;">
-          <img src="{logo_uri}" style="height:36px;border-radius:5px;">
-          <div style="font-family:'Songti SC',Georgia,serif;font-size:16px;font-weight:600;">
+        <div style="display:flex;align-items:center;gap:var(--rt-s4);margin-bottom:var(--rt-s6);">
+          <img src="{logo_uri}" style="height:36px;border-radius:var(--rt-r-md);">
+          <div style="font-family:'Songti SC',Georgia,serif;font-size:var(--rt-fs-brand);font-weight:600;">
             RadTraceRAG
           </div>
         </div>

@@ -155,11 +155,25 @@ SLAKE 的参考答案可以用于问答评测，但其 <code>triple</code> 字�
 - [ ] 发布证据标注集、评测脚本和首份实验报告
 - [ ] 把演示界面接到真实问答链路上
 
+## 视觉基调
+
+<p align="center">
+  <img src="assets/style-board.png" alt="风格视觉板" width="720">
+</p>
+
+纸面 · 可核查 · 克制。参照物是放射科报告和学术论文，不是控制台。
+标志是「窗位」——像素值直方图加朱砂窗位框，取自医学影像本身。
+完整规范见 [风格基调](doc/visual-language.md)。
+
 ## 项目文档
 
 - [产品业务方向](doc/product-direction.md)：目标用户、使用流程、数据选择和产品边界。
 - [技术栈与实现方案](doc/tech-stack.md)：模块划分、LightRAG 集成方式和评测设计。
-- [界面设计规范](doc/ui-design.md)：配色语义、组件规格和实现约定。
+- [风格基调](doc/visual-language.md)：色板、字阶、间距标尺、标志规范、图形语言和文案语气。
+- [界面设计规范](doc/ui-design.md)：布局、分区、组件规格和实现约定。
+
+改样式前先读 `doc/visual-language.md`：所有颜色、字号、间距都是
+`src/radtracerag/ui/theme.py` 里的 token，CSS 里不写字面量。
 
 问答流程可运行后，README 会继续补充数据准备、模型配置和批量评测命令。
 
