@@ -63,12 +63,47 @@ uv run radtracerag doctor
 ~~~text
 src/radtracerag/
 ├── cli.py                 # 命令入口与环境检查
-├── config.py              # 数据、索引目录配置
-├── contracts.py           # 影像问题、证据和答案的数据结构
-├── integrations/lightrag.py  # LightRAG 查询接入点
-├── ui/                    # 演示界面（Streamlit）
+├── config.py              # 数据、索引目录与存储后端配置
+├── contracts.py           # 影像问题、证据、答案和检索模式的数据结构
+├── pipeline.py            # 核心问答链路（传输层无关，CLI / UI / API 共用）
+├── fixtures.py            # 演示用三组对照数据
+├── integrations/
+│   ├── lightrag.py        # LightRAG 接入点，向量库走 Milvus
+│   └── models.py          # 模型适配器，统一走 OpenAI 兼容接口
+├── api/                   # FastAPI 服务，给 React 前端用
+├── ui/                    # 演示界面（Streamlit，开发期与论文配图用）
 ├── data/                  # SLAKE 数据适配位置
 └── evaluation/            # 检索与问答评测位置
+~~~
+
+## 接口
+
+React 前端走这个服务。答案、证据、检索轨迹一次返回，前端按
+「问 → 答 → 图像观察 → 检索轨迹 → 证据」的顺序渲染，和界面上的叙事流一致。
+
+~~~bash
+uv sync --extra dev
+cp .env.example .env        # 填 Milvus 和模型服务地址
+uv run radtracerag-api      # http://127.0.0.1:8000
+~~~
+
+| 端点 | 用途 |
+|---|---|
+| `GET /api/health` | 状态、当前引擎（真实 / 演示）、存储后端 |
+| `GET /api/modes` | 三组对照：A 无 RAG / B 向量 / C 图增强 |
+| `POST /api/query` | `multipart`：影像 + 问题 + 模式，返回完整结果 |
+| `GET /docs` | Swagger 交互文档 |
+
+契约以 `src/radtracerag/api/schemas.py` 为准，前端用 `openapi-typescript`
+从 `/openapi.json` 生成 TS 类型，两边不会各写各的。
+
+没配模型服务时，接口跑在演示引擎上——形状完全一样，内容是合成样例，
+前端可以先照着它把界面做出来。`/api/health` 的 `engine` 字段会告诉你当前是哪一种。
+
+~~~bash
+curl -X POST http://127.0.0.1:8000/api/query \
+  -F "question=图中主要器官的作用是什么？" \
+  -F "mode=mix"
 ~~~
 
 ## 演示界面

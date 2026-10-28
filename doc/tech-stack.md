@@ -6,13 +6,42 @@
 | --- | --- | --- |
 | 开发语言 | Python 3.11（项目约束为 3.11–3.13） | 数据处理、服务、实验与评测统一使用 Python |
 | RAG 核心 | [HKUDS/LightRAG](https://github.com/HKUDS/LightRAG) Python SDK | 知识索引、图/向量检索与检索模式对照；开始编码时锁定具体版本 |
+| 向量库 | Milvus（走 LightRAG 的 `MilvusVectorDBStorage`） | 向量索引；B/C 两组共用同一份底座 |
+| 前端 | React + TypeScript | 产品界面；类型由后端 OpenAPI 生成 |
 | 视觉理解与回答 | 首选候选：[Qwen2.5-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct)，经统一适配器调用 | 提取图像观察，并在相同模型下比较有无检索的回答 |
 | 文本向量 | 首选候选：[BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) | 建立知识事实向量索引；中文展示扩展时也可沿用 |
 | 重排 | 可选：[BAAI/bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3) | 对检索候选重排；先完成无重排基线再加入 |
-| 演示界面 | Streamlit | 上传影像、提问、查看答案和引用证据 |
+| API 层 | FastAPI + uvicorn | 给 React 前端提供答案、证据和检索轨迹 |
+| 演示界面 | Streamlit | 开发期快速验证、论文配图 |
 | 实验与结果 | Python CLI + JSONL/CSV | 批量运行基线、保存逐题预测和指标 |
 
 首阶段使用 LightRAG 的本地存储即可处理 SLAKE 的小型知识库。上述模型是实施候选，不预设它们一定取得最佳效果，也不要求全部在个人电脑上运行；统一适配器可接本地模型或兼容 API。当前 Python 包与 LightRAG 版本记录在 <code>pyproject.toml</code> 和 <code>uv.lock</code>。后续实验还需记录视觉模型名、提示词版本、检索模式、top-k 和随机参数。
+
+## 服务分层
+
+传输层可以换，业务逻辑只有一份。`radtracerag.pipeline.answer_question()` 是唯一的
+编排入口，CLI、Streamlit、FastAPI 都调它：
+
+```text
+React (TS)  ──HTTP──▶  FastAPI  ──▶  pipeline.answer_question()
+Streamlit   ──进程内──▶  pipeline.answer_question()
+CLI（跑批） ──进程内──▶  pipeline.answer_question()
+                              │
+                              ├── VisionObserver   看片（VLM）
+                              ├── Retriever        检索（LightRAG：naive / mix）
+                              └── Answerer         基于证据作答（LLM + 引用回传）
+```
+
+`pipeline` 里的三个 adapter 是 Protocol，换模型或换检索后端只换实现，
+不改编排。三组对照的区别只在 `mode`：`none`（A）不检索、`naive`（B）纯向量、
+`mix`（C）图增强。
+
+**向量库只有一份。** 向量检索交给 LightRAG 的存储层（默认 Milvus），
+B 和 C 必须共用同一个集合与同一套嵌入函数——如果 B 走另一套向量库，
+测出来的「图增强增量」里就混进了底座差异，整个实验结论不成立。
+
+HTTP 契约以 `src/radtracerag/api/schemas.py` 为准，前端用
+`openapi-typescript` 从 `/openapi.json` 生成 TS 类型，两边不会各写各的。
 
 ## 数据与查询链路
 

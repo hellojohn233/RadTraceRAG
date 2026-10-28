@@ -23,7 +23,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from radtracerag.contracts import Answer, Evidence, ImageObservation, RetrievalStep
+from radtracerag.contracts import Answer, Evidence, ImageObservation, Metric, RetrievalStep
 from radtracerag.ui.theme import COLORS
 
 _CITE = re.compile(r"\[(\d+)\]")
@@ -234,10 +234,11 @@ def reference_list(evidence: list[Evidence], cited_ids: tuple[str, ...] = ()) ->
 # ---------------------------------------------------------------- 指标
 
 
-def stat_row(items: list[tuple[str, str]]) -> None:
-    """一行细排指标。items = [(值, 标签), ...]"""
+def stat_row(items: list[Metric]) -> None:
+    """一行细排指标。items = [Metric(值, 标签), ...]"""
     blocks = []
-    for value, label in items:
+    for item in items:
+        value, label = item.value, item.label
         blocks.append(
             f"""
             <div>
