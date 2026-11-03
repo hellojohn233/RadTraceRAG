@@ -31,3 +31,39 @@ def test_validate_markers_with_no_valid_ids_removes_everything():
     assert "[E3]" not in clean and "[E4]" not in clean
     assert valid == ()
     assert unsupported == ("E3", "E4")
+
+
+# --- 列表式 / 大小写 / 带空格的标记写法 ---------------------------------
+
+
+def test_extract_markers_handles_comma_list():
+    """真实模型经常写成 [E1, E9] —— 这种列表里的编号必须能被认出来。"""
+    assert extract_markers("结论 [E1, E9] 成立") == ["E1", "E9"]
+
+
+def test_extract_markers_is_case_insensitive():
+    assert extract_markers("见 [e1]") == ["E1"]
+
+
+def test_extract_markers_allows_space_before_number():
+    assert extract_markers("见 [E 9]") == ["E9"]
+
+
+def test_extract_markers_ignores_marker_outside_brackets():
+    """证据正文里出现 'E1 染色体' 这类字样不是引用，不能当编号。"""
+    assert extract_markers("E1 染色体与 E2 的关系") == []
+
+
+def test_validate_markers_removes_unsupported_inside_list():
+    """列表里混进的编造编号，必须被剔除并计数 —— 否则它会留在最终答案里。"""
+    clean, valid, unsupported = validate_markers("结论 [E1, E9]。", ["E1"])
+    assert unsupported == ("E9",)
+    assert valid == ("E1",)
+    assert "E9" not in clean
+    assert "[E1]" in clean
+
+
+def test_validate_markers_normalizes_case_in_body():
+    clean, valid, _ = validate_markers("见 [e1]。", ["E1"])
+    assert clean == "见 [E1]。"
+    assert valid == ("E1",)
