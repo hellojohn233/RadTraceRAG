@@ -1588,6 +1588,7 @@ dependencies = [
     { name = "pypdf" },
     { name = "python-dotenv" },
     { name = "streamlit" },
+    { name = "tiktoken" },
 ]
 
 [package.dev-dependencies]
@@ -1604,6 +1605,7 @@ requires-dist = [
     { name = "pypdf", specifier = ">=6.21.4" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
     { name = "streamlit", specifier = ">=1.40" },
+    { name = "tiktoken", specifier = ">=0.9" },
 ]
 
 [package.metadata.requires-dev]
