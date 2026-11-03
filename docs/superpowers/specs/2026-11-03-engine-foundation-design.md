@@ -193,7 +193,6 @@ src/radtracerag/
 ├── __init__.py
 ├── __main__.py
 ├── cli.py                    # 改：doctor / ingest / query / eval
-├── config.py                 # 改：保留 Settings，新增 engine 配置读取
 ├── contracts.py              # 保留（医学层用，本轮不动）
 ├── engine/                   # ★ 新增：通用层
 │   ├── __init__.py
@@ -203,10 +202,16 @@ src/radtracerag/
 │   ├── ingest.py             #   文件发现 / 切分 / 入库
 │   ├── retrieve.py           #   四种模式 + 引用解析 + 轨迹
 │   ├── answer.py             #   基于证据生成答案
-│   └── evaluate.py           #   评估骨架（Recall@k / nDCG / EM 接口）
-├── integrations/lightrag.py  # 保留
+│   ├── evaluate.py           #   评估骨架（Recall@k / nDCG / EM 接口）
+│   ├── markers.py            #   引用标记校验
+│   └── errors.py             #   引擎层错误类型
 ├── ui/                       # 本轮不动
 └── evaluation/               # 保留
+
+（实现期的偏离：`config.py` 与 `integrations/lightrag.py` 已删除 ——
+前者与 engine/settings.py 形成两套并存的路径配置且零引用，后者是
+零引用的旧接入点、用的是会吞掉 context 的 `aquery`。
+详见 `.superpowers/sdd/2026-11-03-engine-foundation/progress.md`。）
 
 samples/                      # ★ 新增：内置小语料（进 git）
 ├── 01_abdominal_anatomy.md
