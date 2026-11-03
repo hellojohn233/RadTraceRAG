@@ -58,6 +58,21 @@ def test_discover_files_only_supported_suffixes(tmp_path):
     assert names == {"a.md", "b.txt", "c.pdf"}
 
 
+def test_discover_files_skips_symlinks(tmp_path):
+    """符号链接会把语料目录外的内容带进索引，必须跳过。"""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "ok.md").write_text("x", encoding="utf-8")
+    outside = tmp_path / "outside.md"
+    outside.write_text("不该被索引", encoding="utf-8")
+    try:
+        (corpus / "link.md").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("当前平台不支持创建符号链接")
+    names = {p.name for p in discover_files(corpus)}
+    assert names == {"ok.md"}
+
+
 def test_build_doc_id_is_stable_and_short():
     a = build_doc_id("samples/01_x.md")
     assert a == build_doc_id("samples/01_x.md")

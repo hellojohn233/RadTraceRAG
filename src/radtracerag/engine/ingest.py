@@ -49,7 +49,12 @@ def discover_files(root: Path) -> list[Path]:
     found = [
         path
         for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
+        if path.is_file()
+        and path.suffix.lower() in SUPPORTED_SUFFIXES
+        # 跳过符号链接：指向目录外的链接会把外部内容带进索引
+        and not path.is_symlink()
+        # 目录符号链接下钻也会跑到语料之外
+        and not any(parent.is_symlink() for parent in path.parents)
     ]
     return sorted(found)
 
