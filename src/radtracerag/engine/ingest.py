@@ -1,13 +1,16 @@
 """语料摄入：发现文件 → 抽取文本 → 写入 LightRAG 索引 → 维护路径映射。
 
-两件 LightRAG 不替我们做的事
-------------------------------
+三件 LightRAG 不替我们做的事
+----------------------------
 1. **PDF 解析**：传 ``ids`` 进 ``ainsert`` 一定走 RAW 路径
    （``pipeline.py`` 里明确写着「ids outranks docs_format by design」），
    LightRAG 内置的 pypdf 解析只在服务端上传路径生效。所以 PDF 自己抽。
 2. **完整路径**：LightRAG 会把 ``file_path`` 截成 basename，引用里因此
    看不到目录。我们自己维护 ``path_map.json``（basename → 完整路径），
    检索时用它还原。
+3. **入库结果**：``ainsert`` **从不因为拒收而抛异常** —— 它把结果写进
+   ``doc_status``，返回的只是 track_id。「调用没报错」**不等于**
+   「文档被索引了」。所以每次插入后我们都要回 ``doc_status`` 核实。
 
 幂等
 ----
@@ -41,6 +44,87 @@ class IngestReport:
     failed: tuple[tuple[str, str], ...] = ()
     #: 语料目录里发现的受支持文件总数（不管最终入库几个）
     discovered: int = 0
+
+
+@dataclass(frozen=True)
+class InsertOutcome:
+    """一次 ``ainsert`` 的真实结果。
+
+    ``status`` 取值：
+
+    - ``inserted`` —— 真的进索引了
+    - ``skipped`` —— 被上游判重（内容与已入库文档相同）
+    - ``failed`` —— 上游处理失败，``reason`` 里是上游的原始错误信息
+    """
+
+    status: str
+    reason: str = ""
+
+
+def _field(record, name: str, default=None):
+    """取记录里的一个字段，兼容 dict 与 dataclass 两种形态。
+
+    上游两种 API 的返回类型不一样：``get_by_id`` 给 dict，
+    ``get_docs_by_track_id`` 给 ``DocProcessingStatus`` 数据类。
+    """
+    if isinstance(record, dict):
+        return record.get(name, default)
+    return getattr(record, name, default)
+
+
+def _status_value(raw) -> str:
+    """把状态归一成小写字符串。
+
+    上游 ``DocStatus`` 是 ``str, Enum``，但 ``str(DocStatus.PROCESSED)``
+    得到的是 ``"DocStatus.PROCESSED"`` 而不是 ``"processed"``。
+    """
+    value = getattr(raw, "value", raw)
+    return str(value).lower()
+
+
+async def classify_insert(rag, doc_id: str, track_id: str) -> InsertOutcome:
+    """回 ``doc_status`` 核实这份文档到底进没进索引。
+
+    ``ainsert`` 从不因为拒收而抛异常，它只把结果写进 ``doc_status`` 并返回
+    track_id。上游有三种落法：
+
+    - **正常处理** → ``doc_status[doc_id].status == "processed"``
+    - **处理失败** → ``doc_status[doc_id].status == "failed"``，带 ``error_msg``
+    - **被判重** → **不会**写进我们传的 doc_id，而是另起一条 ``dup-<hash>``
+      记录（``status=failed``、``metadata.is_duplicate=true``），
+      挂在同一个 track_id 下 → 用 ``get_docs_by_track_id`` 才找得到
+
+    第三种最危险：调用方看到「没报错」就以为入库了，实际那份文档根本没进索引。
+    """
+    store = getattr(rag, "doc_status", None)
+    if store is None:
+        # 没有 doc_status 可问（例如测试里的假 rag）→ 无法核实，保持乐观
+        return InsertOutcome("inserted")
+
+    record = await store.get_by_id(doc_id)
+    if record:
+        status = _status_value(_field(record, "status"))
+        if status == "processed":
+            return InsertOutcome("inserted")
+        reason = (
+            _field(record, "error_msg")
+            or _field(record, "content_summary")
+            or f"LightRAG 处理状态为 {status}"
+        )
+        return InsertOutcome("failed", str(reason))
+
+    # 我们传的 doc_id 不存在 → 多半是被判重了（上游会另起 dup- 记录）
+    try:
+        same_track = await store.get_docs_by_track_id(track_id)
+    except Exception:  # pragma: no cover - 上游接口变更时的兜底
+        same_track = {}
+    for _dup_id, dup in (same_track or {}).items():
+        metadata = _field(dup, "metadata") or {}
+        if metadata.get("is_duplicate"):
+            kind = metadata.get("duplicate_kind", "duplicate")
+            return InsertOutcome("skipped", f"与已入库文档重复（{kind}）")
+
+    return InsertOutcome("failed", "LightRAG 未生成该文档的处理记录")
 
 
 def discover_files(root: Path) -> list[Path]:
@@ -157,9 +241,10 @@ async def ingest(
 ) -> IngestReport:
     """把 ``root`` 下的所有受支持文件写入索引。
 
-    - 同名文件（不同目录）→ 全部拒绝，计入 ``failed``；
+    - 同名文件（不同目录）→ 计入 ``failed``，**但不影响其他文件入库**；
     - 已入库的文件 → 计入 ``skipped``；
-    - 单个文件抽取失败 → 计入 ``failed``，不影响其他文件。
+    - 被上游判重（内容相同、文件名不同）→ 计入 ``skipped``；
+    - 单个文件抽取或写入失败 → 计入 ``failed``，不影响其他文件。
     """
     root = Path(root)
     files = discover_files(root)
@@ -182,20 +267,11 @@ async def ingest(
         if not same_file:
             conflicts.add(path.name)
 
-    if conflicts:
-        reason = (
-            "文件名与已入库文档冲突（LightRAG 按文件名判重，同名文件无法共存）: "
-            + ", ".join(sorted(conflicts))
-            + "。请给冲突文件改名，或清空索引目录（RAG_WORKING_DIR）后重新摄入。"
-        )
-        return IngestReport(
-            failed=tuple(
-                (path.relative_to(root).as_posix(), reason)
-                for path in files
-                if path.name in conflicts
-            ),
-            discovered=len(files),
-        )
+    conflict_reason = (
+        "文件名与已入库文档冲突（LightRAG 按文件名判重，同名文件无法共存）: "
+        + ", ".join(sorted(conflicts))
+        + "。请给冲突文件改名，或清空索引目录（RAG_WORKING_DIR）后重新摄入。"
+    )
 
     inserted: list[str] = []
     skipped: list[str] = []
@@ -204,23 +280,42 @@ async def ingest(
     for path in files:
         relative = path.relative_to(root).as_posix()
         key = path.name
+
+        # 冲突只拦冲突的那几个文件 —— 早先的实现在这里整批中止，
+        # 没冲突的文件既没入库也没出现在报告里，等于凭空消失。
+        if key in conflicts:
+            failed.append((relative, conflict_reason))
+            continue
+
         if key in path_map:
             skipped.append(relative)
             continue
+
+        doc_id = build_doc_id(relative)
         try:
             text = extract_text(path)
-            await rag.ainsert(
+            track_id = await rag.ainsert(
                 text,
-                ids=[build_doc_id(relative)],
+                ids=[doc_id],
                 file_paths=[str(path)],
             )
         except Exception as exc:
             failed.append((relative, f"{type(exc).__name__}: {exc}"))
             continue
-        # 存 resolve 后的绝对路径：后续的冲突判定要拿它和别的路径比较，
-        # 存相对路径的话，换个工作目录就判不出来了。
-        path_map[key] = str(path.resolve())
-        inserted.append(relative)
+
+        # ainsert 不抛异常不代表入库成功 —— 回 doc_status 核实。
+        outcome = await classify_insert(rag, doc_id, str(track_id))
+        if outcome.status == "inserted":
+            # 存 resolve 后的绝对路径：后续的冲突判定要拿它和别的路径比较，
+            # 存相对路径的话，换个工作目录就判不出来了。
+            path_map[key] = str(path.resolve())
+            inserted.append(relative)
+        elif outcome.status == "skipped":
+            # 被判重的文件并没有以自己的名字进索引，不写进 path_map ——
+            # 写进去会让检索时的来源还原指向一个并不存在的引用。
+            skipped.append(relative)
+        else:
+            failed.append((relative, outcome.reason))
 
     save_path_map(settings.working_dir, path_map)
     return IngestReport(

@@ -149,3 +149,29 @@ async def test_second_ingest_skips_everything(
     assert second.inserted == ()
     assert len(second.skipped) == 4
     assert second.failed == ()
+
+
+@pytest.mark.asyncio
+async def test_content_duplicate_is_reported_as_skipped_not_inserted(
+    tmp_path, settings_factory, mock_models
+):
+    """内容相同、文件名不同的两份文档，LightRAG 只收一份。
+
+    ``ainsert`` **不抛异常** —— 拒收的结果只写在 ``doc_status`` 里。
+    不去问 doc_status，就会把没进索引的文档报成 inserted：用户看到
+    「新增 2」，实际索引里只有 1 份。
+    """
+    root = tmp_path / "dup"
+    root.mkdir()
+    unique = tmp_path.name
+    body = "# 重复内容\n\n这两份文件的内容完全一样，只有文件名不同。\n"
+    (root / f"{unique}_x.md").write_text(body, encoding="utf-8")
+    (root / f"{unique}_y.md").write_text(body, encoding="utf-8")
+
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+    async with rag_session(settings) as rag:
+        report = await ingest(rag, root, settings)
+
+    assert len(report.inserted) == 1, "只有一份能真正进索引"
+    assert len(report.skipped) == 1, "被判重的那份应计入跳过，不是失败"
+    assert report.failed == ()

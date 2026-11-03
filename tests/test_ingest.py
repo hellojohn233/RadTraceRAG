@@ -285,3 +285,26 @@ async def test_ingest_report_exposes_discovered_count(tmp_path, settings_factory
     settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
     report = await ingest(_FakeRag(), root, settings)
     assert report.discovered == 2
+
+
+@pytest.mark.asyncio
+async def test_ingest_conflict_does_not_drop_non_conflicting_files(tmp_path, settings_factory):
+    """有同名冲突时，只拦冲突的那两个文件，其余照常摄入。
+
+    早先的实现一发现冲突就整批中止，没冲突的文件既没入库也没出现在报告里 ——
+    4 个文件发现、0 个入库、2 个失败，剩下 2 个凭空消失。
+    """
+    root = tmp_path / "corpus"
+    (root / "d1").mkdir(parents=True)
+    (root / "d2").mkdir()
+    (root / "d1" / "dup.md").write_text("x", encoding="utf-8")
+    (root / "d2" / "dup.md").write_text("y", encoding="utf-8")
+    (root / "unique.md").write_text("z", encoding="utf-8")
+
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
+    report = await ingest(_FakeRag(), root, settings)
+
+    assert report.inserted == ("unique.md",), "没冲突的文件必须照常入库"
+    assert len(report.failed) == 2, "两个冲突文件都要报出来"
+    assert {name for name, _ in report.failed} == {"d1/dup.md", "d2/dup.md"}
+    assert report.discovered == 3
