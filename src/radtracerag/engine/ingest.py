@@ -33,6 +33,32 @@ SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf"}
 #: 路径映射文件名（存放在工作目录下）
 PATH_MAP_FILENAME = "path_map.json"
 
+try:  # pragma: no cover - 上游改名时走兜底分支
+    from lightrag.utils_pipeline import normalize_document_file_path
+except Exception:  # pragma: no cover
+    normalize_document_file_path = None
+
+
+def canonical_basename(path: Path) -> str:
+    """文件名在 LightRAG 眼里的规范形式。
+
+    LightRAG 存 ``file_path`` 时会用 ``normalize_document_file_path`` 剥掉
+    解析器提示段 —— ``abc.pdf`` 和 ``abc.[native-iet].pdf`` 会归并成同一个 key
+    （``utils_pipeline.py:248``）。我们必须用同一个函数算 key，否则：
+
+    - 同名冲突检测会漏判这一对，第二个文件被上游静默丢弃；
+    - ``path_map`` 存的是原始文件名，检索时按规范名查不到，
+      引用里的来源路径就还原不出来。
+    """
+    name = Path(path).name
+    if normalize_document_file_path is None:
+        return name
+    try:
+        canonical = normalize_document_file_path(name)
+    except Exception:  # pragma: no cover - 上游行为异常时的兜底
+        return name
+    return canonical or name
+
 
 @dataclass(frozen=True)
 class IngestReport:
@@ -223,7 +249,8 @@ def save_path_map(working_dir: Path, mapping: dict[str, str]) -> None:
 def find_basename_conflicts(paths: list[Path], root: Path) -> list[str]:
     """找出在多个目录下出现同名的文件。
 
-    LightRAG 按 basename 归并引用，同名文件会互相覆盖，所以必须先拦下来。
+    LightRAG 按规范名（basename 去掉解析器提示段）归并引用，同名文件会互相
+    覆盖，所以必须先拦下来。返回的是**规范名**。
     """
     root = Path(root)
     seen: dict[str, set[str]] = {}
@@ -232,7 +259,7 @@ def find_basename_conflicts(paths: list[Path], root: Path) -> list[str]:
             relative = path.relative_to(root).as_posix()
         except ValueError:
             relative = path.as_posix()
-        seen.setdefault(path.name, set()).add(relative)
+        seen.setdefault(canonical_basename(path), set()).add(relative)
     return sorted(name for name, relatives in seen.items() if len(relatives) > 1)
 
 
@@ -255,7 +282,8 @@ async def ingest(
     # 不能让 ainsert 静默丢掉文档。
     conflicts = set(find_basename_conflicts(files, root))
     for path in files:
-        known = path_map.get(path.name)
+        key = canonical_basename(path)
+        known = path_map.get(key)
         if known is None:
             continue
         # 比的是 resolve 之后的真实路径，不是字符串：同一个文件用相对路径
@@ -265,7 +293,7 @@ async def ingest(
         except OSError:  # pragma: no cover - 极少见的路径解析失败
             same_file = False
         if not same_file:
-            conflicts.add(path.name)
+            conflicts.add(key)
 
     conflict_reason = (
         "文件名与已入库文档冲突（LightRAG 按文件名判重，同名文件无法共存）: "
@@ -279,7 +307,7 @@ async def ingest(
 
     for path in files:
         relative = path.relative_to(root).as_posix()
-        key = path.name
+        key = canonical_basename(path)
 
         # 冲突只拦冲突的那几个文件 —— 早先的实现在这里整批中止，
         # 没冲突的文件既没入库也没出现在报告里，等于凭空消失。

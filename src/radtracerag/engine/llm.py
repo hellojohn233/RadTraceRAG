@@ -16,8 +16,13 @@ LightRAG 1.5.7 的 ``openai_embed`` 有两个会让我们直接踩雷的地方�
 
 关于导入顺序
 ------------
-``lightrag.llm.openai`` 在 import 时读取模块级常量，因此 .env 必须先加载。
-本模块把 openai helper 的导入推迟到第一次调用时，确保 dotenv 已经生效。
+``lightrag.llm.openai`` 在 import 时读取模块级常量（如
+``EMBEDDING_USE_BASE64``），所以 .env 必须在它之前加载。本模块把 openai
+helper 的导入推迟到第一次调用时，确保 dotenv 已经生效。
+
+（实测：``import lightrag`` 本身**不会**顺带 import ``lightrag.llm.openai``，
+所以这道防线目前不是必需的 —— 保留它是因为上游哪天改成 eager import 也不会
+把我们咬到。注释里原来的说法夸大了这个风险，这里按实测结果写。）
 """
 
 from __future__ import annotations

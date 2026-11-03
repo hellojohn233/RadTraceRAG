@@ -308,3 +308,26 @@ async def test_ingest_conflict_does_not_drop_non_conflicting_files(tmp_path, set
     assert len(report.failed) == 2, "两个冲突文件都要报出来"
     assert {name for name, _ in report.failed} == {"d1/dup.md", "d2/dup.md"}
     assert report.discovered == 3
+
+
+def test_find_basename_conflicts_detects_parser_hint_variant(tmp_path):
+    """LightRAG 会把 ``a.pdf`` 与 ``a.[native-iet].pdf`` 归并成同一个 key。
+
+    我们的冲突检测如果按原始文件名分组，就会漏判这一对 —— 第二个文件
+    会被上游静默丢弃，而我们报告说它入库了。
+    """
+    (tmp_path / "a.pdf").write_bytes(b"%PDF-")
+    (tmp_path / "a.[native-iet].pdf").write_bytes(b"%PDF-")
+    conflicts = find_basename_conflicts(discover_files(tmp_path), tmp_path)
+    assert conflicts == ["a.pdf"], "冲突要按上游的规范名报告"
+
+
+@pytest.mark.asyncio
+async def test_path_map_key_uses_canonical_basename(tmp_path, settings_factory):
+    """path_map 的 key 必须与 LightRAG 存的 file_path 一致，否则检索时还原不出路径。"""
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a.[native-iet].pdf").write_bytes(_make_pdf_with_text("内容"))
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
+    await ingest(_FakeRag(), root, settings)
+    assert load_path_map(settings.working_dir) == {"a.pdf": str((root / "a.[native-iet].pdf").resolve())}
