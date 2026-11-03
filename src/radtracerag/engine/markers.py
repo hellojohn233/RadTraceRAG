@@ -65,6 +65,24 @@ def strip_markers(text: str) -> str:
     return GROUP_PATTERN.sub(_drop, text)
 
 
+#: 只由分隔符与空白组成的内容
+SEPARATOR_ONLY = re.compile(r"^[\s,;、]*$")
+
+
+def _split_group(inner: str) -> list[tuple[str | None, str]]:
+    """把方括号内容拆成 ``[(编号 or None, 文字), ...]``。"""
+    pieces: list[tuple[str | None, str]] = []
+    pos = 0
+    for match in MARKER_PATTERN.finditer(inner):
+        if match.start() > pos:
+            pieces.append((None, inner[pos : match.start()]))
+        pieces.append((f"E{match.group(1)}", match.group(0)))
+        pos = match.end()
+    if pos < len(inner):
+        pieces.append((None, inner[pos:]))
+    return pieces
+
+
 def validate_markers(
     text: str, valid_ids: Iterable[str]
 ) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
@@ -74,8 +92,9 @@ def validate_markers(
 
     - 有效编号**保留**在正文中，读者需要看到 ``[E1]`` 对应哪条证据；
     - 无效编号从正文移除，不给模型编造的引用留下位置；
-    - 列表写法（``[E1, E9]``）会被重写成只含有效编号的形式（``[E1]``）；
-    - 正文里的编号统一成大写形式（``[e1]`` → ``[E1]``）。
+    - 纯编号的组（``[E1, E9]``）重写成只含有效编号的形式（``[E1]``）；
+    - 混着别的文字的组（``[依据 E1 的数据]``）**只摘掉无效编号**，
+      其余文字原样保留 —— 那是答案正文里的内容，不能被吃掉。
     """
     allowed = set(valid_ids)
     found = extract_markers(text)
@@ -84,12 +103,41 @@ def validate_markers(
 
     def _rewrite(match: re.Match[str]) -> str:
         inner = match.group(1)
-        if not MARKER_PATTERN.search(inner):
+        markers = _markers_in(inner)
+        if not markers:
             return match.group(0)
-        kept = [marker for marker in _markers_in(inner) if marker in allowed]
-        if not kept:
-            return ""
-        return "[" + ", ".join(kept) + "]"
+
+        pieces = _split_group(inner)
+        marker_only = all(
+            marker is not None or SEPARATOR_ONLY.match(text_piece)
+            for marker, text_piece in pieces
+        )
+        canonical = "[" + ", ".join(markers) + "]"
+
+        if all(marker in allowed for marker in markers):
+            # 写法不规范的（[e1] / [E 9]）归一成 [E1]，其余原样保留
+            if marker_only and canonical != match.group(0):
+                return canonical
+            return match.group(0)
+
+        if marker_only:
+            kept = [
+                marker
+                for marker, _piece in pieces
+                if marker is not None and marker in allowed
+            ]
+            if not kept:
+                return ""
+            return "[" + ", ".join(kept) + "]"
+
+        # 组里还有别的文字 → 只把无效编号摘掉，其余原样保留
+        cleaned = "".join(
+            piece_text
+            if marker is None or marker in allowed
+            else ""
+            for marker, piece_text in pieces
+        )
+        return "[" + cleaned + "]"
 
     clean = GROUP_PATTERN.sub(_rewrite, text)
     return clean, valid, unsupported

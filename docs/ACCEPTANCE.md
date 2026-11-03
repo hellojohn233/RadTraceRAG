@@ -101,7 +101,8 @@ uv run radtracerag ingest samples/
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `文件名与已入库文档冲突 ...` | LightRAG 按文件名判重，同名文件无法共存 | 给其中一个改名，或**清空整个索引目录**（`RAG_WORKING_DIR`）后重来 —— 只删 `path_map.json` 不够，LightRAG 自己的索引里还在 |
+| `文件名与已入库文档冲突 ...` | 已入库的同名文件**内容不同** —— 真的是两份文档 | 给其中一个改名，或**清空整个索引目录**（`RAG_WORKING_DIR`）后重来 |
+| `~ xxx.md（与已入库文档重复（filename））` | 同一份内容换个名字再提交，上游按文件名判重跳过 | 正常现象，不算失败 |
 | `发现 0 个受支持文件` | 目录里没有 `.txt`/`.md`/`.pdf`，或路径写错 | 检查文件后缀与路径 |
 | `! xxx.pdf: PDF 解析失败` | 文件损坏或加密 | 换文件，或先转成文字 |
 | `语料目录不存在` | 路径写错 | 检查相对路径是相对**项目根**的 |
@@ -123,7 +124,7 @@ uv run radtracerag query "肝脏的主要功能是什么？" --mode mix
   肝脏负责代谢与解毒，并合成胆汁 [E1]。
 
 证据
-  [E1] /abs/path/to/RadTraceRAG/samples/02_liver_function.md  (chunk_id=..., reference_id=1)
+  [E1] samples/02_liver_function.md  (chunk_id=..., reference_id=1)
        肝脏是维持血糖稳态的核心器官……
 
 检索轨迹
@@ -155,7 +156,7 @@ uv run radtracerag query "肝脏的主要功能是什么？" --mode mix
 |---|---|---|
 | `没有检索到可用证据，无法回答。` | 检索没命中，或还没 ingest | 先跑 ingest |
 | `执行失败: 检索失败（Query failed: ...）` | **上游服务故障**，不是「没检索到」 | 退出码为 1，按提示检查 LLM/Embedding 服务 |
-| 证据的 `source` 只有文件名没有目录 | `path_map.json` 丢失 | 重新 ingest |
+| 证据的 `source` 只有文件名没有目录 | `path_map.json` 丢失或损坏 | 重新 ingest（损坏时命令会先告警） |
 | `已剔除 N 个不存在的编号` | 模型引用了不存在的证据 | **这是正常的观测信号**，说明模型在编造引用，引用编号已被从正文移除 |
 | `回答里没有任何引用标记` | 模型没按约定标注依据 | **这是正常的观测信号**，说明回答没有绑定证据 |
 

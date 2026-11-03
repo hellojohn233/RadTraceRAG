@@ -137,3 +137,38 @@ def test_doctor_reports_actual_embedding_dimension_on_mismatch(
     assert "768" in text, "要报出服务商的真实维度"
     assert "1024" in text, "也要报出配置的维度"
     assert "维度不一致" in text
+
+
+def test_doctor_reports_empty_index_dir(tmp_path, monkeypatch, capsys):
+    """索引目录存在但是空的，要说清楚 —— 空的索引目录不是可用的索引。"""
+    import numpy as np
+
+    working = tmp_path / "empty_index"
+    working.mkdir()
+    fake = _fake_settings_cls(tmp_path)
+    fake.working_dir = working
+    monkeypatch.setattr("radtracerag.cli.EngineSettings", fake)
+
+    async def _fake_embed_once(settings, text):
+        return np.zeros(1024, dtype=np.float32), 1024
+
+    monkeypatch.setattr("radtracerag.cli.embed_once", _fake_embed_once)
+
+    async def _fake_llm(*args, **kwargs):
+        return "OK"
+
+    monkeypatch.setattr("radtracerag.cli.build_llm_func", lambda s: _fake_llm)
+
+    rc = main(["doctor"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "空" in captured.out + captured.err
+
+
+def test_query_rejects_non_positive_top_k(tmp_path, monkeypatch, capsys):
+    """--top-k 必须是正整数。0 会被静默忽略，负数会被直接传给 LightRAG。"""
+    monkeypatch.setattr("radtracerag.cli.EngineSettings", _fake_settings_cls(tmp_path))
+    rc = main(["query", "问题", "--top-k", "0"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "top-k" in captured.out + captured.err

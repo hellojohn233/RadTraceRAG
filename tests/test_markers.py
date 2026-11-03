@@ -67,3 +67,16 @@ def test_validate_markers_normalizes_case_in_body():
     clean, valid, _ = validate_markers("见 [e1]。", ["E1"])
     assert clean == "见 [E1]。"
     assert valid == ("E1",)
+
+
+def test_validate_markers_keeps_non_marker_text_in_group():
+    """方括号里的非标记文字不能被吃掉。
+
+    模型写成「[依据 E1 的数据]」时，把整组换成「[E1]」会把「依据」和
+    「的数据」一起丢掉 —— 那是答案正文里的内容。
+    """
+    clean, valid, _ = validate_markers("见 [依据 E1 的数据]。", ["E1"])
+    assert "依据" in clean
+    assert "的数据" in clean
+    assert "E1" in clean
+    assert valid == ("E1",)

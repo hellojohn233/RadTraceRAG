@@ -36,6 +36,21 @@ from radtracerag.engine.settings import EngineSettings
 VALID_MODES = ("naive", "local", "global", "mix")
 
 
+def _positive_int(raw: str) -> int:
+    """argparse 的正整数类型。
+
+    0 会被 ``if args.top_k:`` 静默忽略（用户以为改了，其实没改），
+    负数会被直接传给 LightRAG。两者都在这里挡住。
+    """
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"必须是整数，收到 {raw!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"必须大于 0，收到 {value}")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="radtracerag",
@@ -63,9 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     query_parser.add_argument(
         "--top-k",
-        type=int,
+        type=_positive_int,
         default=None,
-        help="覆盖 top_k",
+        help="覆盖 top_k（正整数）",
     )
 
     subcommands.add_parser("eval", help="评测")
@@ -128,10 +143,12 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
         return 1
     print(f"LLM 响应: {reply.strip()[:60]} ({elapsed} ms)")
 
-    if settings.working_dir.exists():
-        print(f"索引目录: {settings.working_dir}（已存在）")
-    else:
+    if not settings.working_dir.exists():
         print(f"索引目录: {settings.working_dir}（尚未创建，先跑 ingest）")
+    elif not any(settings.working_dir.iterdir()):
+        print(f"索引目录: {settings.working_dir}（存在但为空，先跑 ingest）")
+    else:
+        print(f"索引目录: {settings.working_dir}（已存在）")
     return 0
 
 
@@ -153,12 +170,14 @@ async def cmd_ingest(args: argparse.Namespace) -> int:
 
     print(
         f"发现 {report.discovered} 个受支持文件 · 新增 {len(report.inserted)} · "
-        f"跳过 {len(report.skipped)} · 失败 {len(report.failed)}"
+        f"跳过 {len(report.skipped) + len(report.duplicates)} · 失败 {len(report.failed)}"
     )
     for relative in report.inserted:
         print(f"  + {relative}")
     for relative in report.skipped:
         print(f"  = {relative}（已入库）")
+    for relative, reason in report.duplicates:
+        print(f"  ~ {relative}（{reason}）")
     for relative, reason in report.failed:
         print(f"  ! {relative}: {reason}")
 
@@ -182,7 +201,8 @@ async def cmd_query(args: argparse.Namespace) -> int:
         answer = await answer_question(args.question, result.evidences, settings)
 
     print("答案")
-    print(f"  {answer.text}")
+    for line in answer.text.splitlines():
+        print(f"  {line}")
     print()
     print("证据")
     if not result.evidences:
