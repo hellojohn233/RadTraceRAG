@@ -77,12 +77,17 @@ uv run radtracerag ingest samples/
 **期望输出**：
 
 ```
-新增 4 · 跳过 0 · 失败 0
+发现 4 个受支持文件 · 新增 4 · 跳过 0 · 失败 0
   + 01_abdominal_anatomy.md
   + 02_liver_function.md
   + 03_ct_imaging_basics.md
   + 04_spleen_pancreas.md
 ```
+
+> **「发现 N 个受支持文件」这一项要盯。** 它是语料目录里实际被识别出的文件数
+> （`.txt` / `.md` / `.pdf`）。如果它大于 0 但「新增 + 跳过 + 失败」加起来对不上，
+> 说明文件被静默丢掉了 —— 这正是之前符号链接判定过宽导致的故障，
+> 现在这个数字让问题看得见。
 
 再跑一次：
 
@@ -90,13 +95,14 @@ uv run radtracerag ingest samples/
 uv run radtracerag ingest samples/
 ```
 
-**期望输出**：`新增 0 · 跳过 4 · 失败 0`，每行前缀 `=`，退出码 0。
+**期望输出**：`发现 4 个受支持文件 · 新增 0 · 跳过 4 · 失败 0`，每行前缀 `=`，退出码 0。
 
 **失败处理**
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `文件名与已入库文档冲突 ...` | LightRAG 按文件名判重，同名文件无法共存 | 给其中一个改名，或清掉 `rag_storage/path_map.json` 后重来 |
+| `文件名与已入库文档冲突 ...` | LightRAG 按文件名判重，同名文件无法共存 | 给其中一个改名，或**清空整个索引目录**（`RAG_WORKING_DIR`）后重来 —— 只删 `path_map.json` 不够，LightRAG 自己的索引里还在 |
+| `发现 0 个受支持文件` | 目录里没有 `.txt`/`.md`/`.pdf`，或路径写错 | 检查文件后缀与路径 |
 | `! xxx.pdf: PDF 解析失败` | 文件损坏或加密 | 换文件，或先转成文字 |
 | `语料目录不存在` | 路径写错 | 检查相对路径是相对**项目根**的 |
 
@@ -168,7 +174,7 @@ uv run radtracerag query "肝脏的主要功能是什么？" --mode mix
 - [ ] `git grep -nE "sk-[A-Za-z0-9]{16,}"` 无命中
 - [ ] `grep -rniE "slake|liver|肝脏|medvqa" src/radtracerag/engine/ --include="*.py"` 无命中（引擎层无领域硬编码）
 - [ ] `uv run radtracerag doctor` 退出码 0
-- [ ] `uv run radtracerag ingest samples/` 退出码 0，重复执行退出码仍为 0 且全部计入「跳过」
+- [ ] `uv run radtracerag ingest samples/` 退出码 0，`发现 4 个受支持文件 · 新增 4`，重复执行退出码仍为 0 且全部计入「跳过」
 - [ ] `uv run radtracerag query "..."` 输出答案 + 证据 + 检索轨迹，答案含 `[E1]` 标记
 - [ ] `naive` 与 `mix` 在耗时或图谱统计上有可观察差异
 
@@ -182,4 +188,5 @@ uv run radtracerag query "肝脏的主要功能是什么？" --mode mix
 | 医学影像链路未接 | 引擎层不处理影像；VLM 适配器属于下一阶段 |
 | 评测集未构建 | `radtracerag eval` 目前只报告「评测集尚未构建」 |
 | 同名文件不能共存 | LightRAG 的限制，已在 ingest 阶段显式拦截 |
+| 文件内容改了不会自动更新索引 | 摄入是按**文件名**判重的；同一个文件名改了内容再 ingest 会被算作「已入库」而跳过。要更新内容，得改文件名，或清空索引目录重新摄入 |
 | 中文语料未覆盖 | 演示语料为中文，但无中文评测集 |
