@@ -66,7 +66,7 @@ uv run radtracerag ingest samples/                          # 建索引，支持
 uv run radtracerag query "肝脏的主要功能是什么？" --mode mix
 ~~~
 
-`query` 打印四层：答案（带 <code>[E1]</code> 形式的引用标记）、证据（来源文件 + chunk id）、检索轨迹、引用校验结果。检索模式可选 <code>naive</code> / <code>local</code> / <code>global</code> / <code>mix</code>。
+`query` 打印五层：答案（带 <code>[E1]</code> 形式的引用标记）、证据（来源文件 + chunk id）、检索轨迹、检索统计、引用校验结果。检索模式可选 <code>naive</code> / <code>local</code> / <code>global</code> / <code>mix</code>。
 
 没有 API key 也能验证整条链路：
 

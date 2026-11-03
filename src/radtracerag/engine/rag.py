@@ -12,6 +12,8 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+import logging
+
 from lightrag import LightRAG
 from lightrag.utils import setup_logger
 
@@ -21,6 +23,12 @@ from radtracerag.engine.settings import EngineSettings
 #: LightRAG 的日志名
 LOGGER_NAME = "lightrag"
 
+#: 需要一起压到 WARNING 的第三方 logger。
+#: ``nano-vectordb`` 是**独立的顶层 logger**（不是 ``lightrag`` 的子 logger），
+#: 只压 ``lightrag`` 对它无效 —— 否则每次跑 CLI 都会冒几行 ``INFO:nano-vectordb``。
+#: LightRAG 自己还会把 ``openai`` 的 logger 设成 INFO（``llm/openai.py:411``）。
+THIRD_PARTY_LOGGERS = ("nano-vectordb", "openai", "httpx", "httpcore")
+
 
 def build_rag(settings: EngineSettings) -> LightRAG:
     """按配置构造一个 LightRAG 实例（尚未初始化存储）。
@@ -29,6 +37,8 @@ def build_rag(settings: EngineSettings) -> LightRAG:
     ``log_level`` 构造参数（传入会告警并被 delattr）。
     """
     setup_logger(LOGGER_NAME, level="WARNING", enable_file_logging=False)
+    for name in THIRD_PARTY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
     return LightRAG(
         working_dir=str(settings.working_dir),
         llm_model_func=build_llm_func(settings),

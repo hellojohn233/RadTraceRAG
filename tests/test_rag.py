@@ -49,3 +49,15 @@ async def test_rag_session_finalizes_on_error(monkeypatch, settings):
         async with rag_session(settings):
             raise RuntimeError("boom")
     assert events == ["init", "final"]
+
+
+def test_build_rag_silences_third_party_loggers(settings):
+    """第三方 logger 也要压到 WARNING。
+
+    ``nano-vectordb`` 是**独立的顶层 logger**（不是 ``lightrag`` 的子 logger），
+    压 ``lightrag`` 对它无效 —— 每次跑 CLI 都会冒三行 ``INFO:nano-vectordb``。
+    LightRAG 自己还会把 ``openai`` 的 logger 设成 INFO。
+    """
+    build_rag(settings)
+    for name in ("nano-vectordb", "openai", "httpx", "httpcore"):
+        assert logging.getLogger(name).level == logging.WARNING, name

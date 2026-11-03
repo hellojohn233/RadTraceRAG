@@ -116,14 +116,14 @@ uv run radtracerag ingest samples/
 uv run radtracerag query "肝脏的主要功能是什么？" --mode mix
 ```
 
-**期望输出**分四段：
+**期望输出**分五段：
 
 ```
 答案
   肝脏负责代谢与解毒，并合成胆汁 [E1]。
 
 证据
-  [E1] samples/02_liver_function.md  (chunk_id=..., reference_id=1)
+  [E1] /abs/path/to/RadTraceRAG/samples/02_liver_function.md  (chunk_id=..., reference_id=1)
        肝脏是维持血糖稳态的核心器官……
 
 检索轨迹
