@@ -451,7 +451,8 @@ uv run pytest -q                                 # 单测通过
 - `mix` 模式在 SLAKE 小知识库（KG.zip 仅 0.1MB）上是否有收益 —— 需做规模探针
 - README 与文档整体重写（当前仍描述医学影像全链路，与本轮后的实际形态有偏差）
 - GitHub Social Preview 图（1280×640）
-- `assets/export_png.sh` 里硬编码的 `/Users/viralt/Project/RadTraceRAG` 路径需修正
+- `assets/export_png.sh` 里硬编码的 `/Users/viralt/Project/RadTraceRAG` 路径 —— **已修**（改为按脚本位置推导仓库根，
+  并给 headless Chrome 加独立 `--user-data-dir`，避免参数被路由到用户已运行的 Chrome 实例）
 
 ---
 

@@ -8,7 +8,10 @@ __pycache__/
 .env
 .env.*
 !.env.example
-data/
+/data/
+# 包内 data/ 只保留说明文档，数据文件不进仓库
+/src/radtracerag/data/*
+!/src/radtracerag/data/README.md
 artifacts/
 rag_storage/
 *.egg-info/

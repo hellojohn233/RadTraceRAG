@@ -81,7 +81,6 @@ uv run pytest -q
 ~~~text
 src/radtracerag/
 ├── cli.py                 # 命令入口：doctor / ingest / query / eval
-├── config.py              # 数据、索引目录配置
 ├── contracts.py           # 影像问题、证据和答案的数据结构（医学层）
 ├── engine/                # 通用引擎层，语料无关
 │   ├── settings.py        #   配置读取与校验
@@ -94,7 +93,7 @@ src/radtracerag/
 │   └── contracts.py       #   通用数据结构
 ├── integrations/lightrag.py  # LightRAG 查询接入点
 ├── ui/                    # 演示界面（Streamlit）
-├── data/                  # SLAKE 数据适配位置
+├── data/                  # 数据集适配层（下一阶段接 SLAKE）
 └── evaluation/            # 检索与问答评测位置
 ~~~
 
