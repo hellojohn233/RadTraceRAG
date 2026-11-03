@@ -149,3 +149,24 @@ async def test_retrieve_treats_no_results_as_empty_not_error(settings):
 
     result = await retrieve(_EmptyRag(), "问题", "mix", settings, {})
     assert result.evidences == ()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_raises_on_empty_upstream_payload(settings):
+    """上游有时用**空字典**表示故障，而不是 status='failure'。
+
+    ``lightrag.py:4194`` 是 ``final_data = query_result.raw_data or {}``，
+    而 ``QueryResult.raw_data`` 默认是 ``None``（``base.py:1817``）——
+    这条路径返回的 payload 既没有 ``status`` 也没有 ``data``。
+
+    不检查的话，坏掉的服务会被显示成「没有检索到可用证据」，退出码 0 ——
+    CI 会把一次服务商故障当成一次空结果，记进实验报告。
+    """
+    from radtracerag.engine.errors import EngineError
+
+    class _EmptyRag:
+        async def aquery_data(self, query, param):
+            return {}
+
+    with pytest.raises(EngineError):
+        await retrieve(_EmptyRag(), "问题", "mix", settings, {})

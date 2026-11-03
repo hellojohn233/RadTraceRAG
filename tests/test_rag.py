@@ -59,5 +59,10 @@ def test_build_rag_silences_third_party_loggers(settings):
     LightRAG 自己还会把 ``openai`` 的 logger 设成 INFO。
     """
     build_rag(settings)
-    for name in ("nano-vectordb", "openai", "httpx", "httpcore"):
+    # nano_vectordb 在 import 时调用 logging.basicConfig(level=INFO)，
+    # 把 **root** logger 抬到了 INFO —— 所有 NOTSET 的第三方 logger 都跟着
+    # 变成 INFO。不压 root 就压不干净。
+    assert logging.getLogger().level == logging.WARNING
+    # openai 3.42.1 用的是 httpx2 包，它的 logger 名叫 "httpx2"
+    for name in ("nano-vectordb", "openai", "httpx2", "httpcore2"):
         assert logging.getLogger(name).level == logging.WARNING, name
