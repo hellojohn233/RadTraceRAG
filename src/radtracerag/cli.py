@@ -96,7 +96,7 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
     settings, errors = _load_settings()
     if settings is None:
         for error in errors:
-            print(error, file=sys.stderr)
+            print(error)
         return 1
 
     print(f"LLM      {settings.llm_model} @ {settings.llm_base_url}")
@@ -106,14 +106,13 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         _, actual_dim = await embed_once(settings, "dimension probe")
     except Exception as exc:
-        print(f"Embedding 调用失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"Embedding 调用失败: {type(exc).__name__}: {exc}")
         return 1
     print(f"Embedding 维度: 实际 {actual_dim} / 配置 {settings.embedding_dim}")
     if actual_dim != settings.embedding_dim:
         print(
             f"维度不一致: 服务商返回 {actual_dim} 维，EMBEDDING_DIM 配的是 "
-            f"{settings.embedding_dim}。请修正 EMBEDDING_DIM 后重试。",
-            file=sys.stderr,
+            f"{settings.embedding_dim}。请修正 EMBEDDING_DIM 后重试。"
         )
         return 1
 
@@ -124,7 +123,7 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
         reply = await llm_func(prompt="ping", system_prompt="只回复 OK")
         elapsed = int((time.perf_counter() - started) * 1000)
     except Exception as exc:
-        print(f"LLM 调用失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"LLM 调用失败: {type(exc).__name__}: {exc}")
         return 1
     print(f"LLM 响应: {reply.strip()[:60]} ({elapsed} ms)")
 
@@ -140,12 +139,12 @@ async def cmd_ingest(args: argparse.Namespace) -> int:
     settings, errors = _load_settings()
     if settings is None:
         for error in errors:
-            print(error, file=sys.stderr)
+            print(error)
         return 1
 
     root = Path(args.path)
     if not root.exists():
-        print(f"语料目录不存在: {root}", file=sys.stderr)
+        print(f"语料目录不存在: {root}")
         return 1
 
     async with rag_session(settings) as rag:
@@ -157,7 +156,7 @@ async def cmd_ingest(args: argparse.Namespace) -> int:
     for relative in report.skipped:
         print(f"  = {relative}（已入库）")
     for relative, reason in report.failed:
-        print(f"  ! {relative}: {reason}", file=sys.stderr)
+        print(f"  ! {relative}: {reason}")
 
     return 1 if report.failed else 0
 
@@ -167,7 +166,7 @@ async def cmd_query(args: argparse.Namespace) -> int:
     settings, errors = _load_settings()
     if settings is None:
         for error in errors:
-            print(error, file=sys.stderr)
+            print(error)
         return 1
 
     if args.top_k:
