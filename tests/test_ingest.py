@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from radtracerag.engine.ingest import (
@@ -204,3 +206,82 @@ async def test_ingest_records_failure_without_stopping(tmp_path, settings_factor
     report = await ingest(_FakeRag(), root, settings)
     assert report.inserted == ("good.md",)
     assert report.failed and report.failed[0][0] == "bad.pdf"
+
+
+# --- 符号链接与路径归一化 -------------------------------------------------
+
+
+def test_discover_files_keeps_files_under_a_symlinked_ancestor(tmp_path):
+    """语料根目录的祖先是符号链接时，仍必须找到文件。
+
+    macOS 上 ``/var -> /private/var``、``/tmp -> /private/tmp``，
+    临时目录和很多用户主目录都长这样。早期实现用「祖先里不能有符号链接」
+    兜底，结果整棵语料被静默丢弃 —— 摄入 0 个文件还报告成功。
+    """
+    real = tmp_path / "real"
+    real.mkdir()
+    corpus = real / "corpus"
+    corpus.mkdir()
+    (corpus / "a.md").write_text("x", encoding="utf-8")
+    try:
+        linked = tmp_path / "linked"
+        linked.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("当前平台不支持创建符号链接")
+
+    names = {p.name for p in discover_files(linked / "corpus")}
+    assert names == {"a.md"}
+
+
+def test_discover_files_skips_symlinked_directory_pointing_outside(tmp_path):
+    """指向语料目录外的符号链接目录，里面的文件不能进索引。"""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "ok.md").write_text("x", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("不该被索引", encoding="utf-8")
+    try:
+        (corpus / "linkdir").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("当前平台不支持创建符号链接")
+
+    names = {p.name for p in discover_files(corpus)}
+    assert names == {"ok.md"}
+
+
+@pytest.mark.asyncio
+async def test_ingest_same_corpus_by_different_path_spellings_is_skipped(
+    tmp_path, monkeypatch, settings_factory
+):
+    """同一份语料用相对路径和绝对路径两次摄入，不该被判成「文件名冲突」。
+
+    path_map 存的是路径字符串，直接比字符串的话，同一个文件会因为写法
+    不同被当成两个不同文件 —— 但 LightRAG 那边看到的是同一个 basename。
+    """
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a.md").write_text("内容", encoding="utf-8")
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+
+    first = await ingest(_FakeRag(), corpus, settings)
+    assert first.inserted == ("a.md",)
+
+    monkeypatch.chdir(tmp_path)
+    second = await ingest(_FakeRag(), Path("corpus"), settings)
+    assert second.inserted == ()
+    assert second.skipped == ("a.md",)
+    assert second.failed == ()
+
+
+@pytest.mark.asyncio
+async def test_ingest_report_exposes_discovered_count(tmp_path, settings_factory):
+    """报告里要能看到发现了几个受支持文件 —— 「摄入 0 个」必须看得见。"""
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a.md").write_text("x", encoding="utf-8")
+    (root / "b.txt").write_text("y", encoding="utf-8")
+    (root / "c.rst").write_text("忽略", encoding="utf-8")
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
+    report = await ingest(_FakeRag(), root, settings)
+    assert report.discovered == 2

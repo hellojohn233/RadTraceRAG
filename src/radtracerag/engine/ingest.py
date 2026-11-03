@@ -39,23 +39,48 @@ class IngestReport:
     skipped: tuple[str, ...] = ()
     #: (相对路径, 失败原因) 序列
     failed: tuple[tuple[str, str], ...] = ()
+    #: 语料目录里发现的受支持文件总数（不管最终入库几个）
+    discovered: int = 0
 
 
 def discover_files(root: Path) -> list[Path]:
-    """递归发现受支持的文件，按路径排序返回。"""
+    """递归发现受支持的文件，按路径排序返回。
+
+    符号链接怎么处理
+    ----------------
+    - **文件本身是符号链接** → 跳过。链接可能指向语料目录之外，
+      把外部内容索引进知识库就是信息泄漏。
+    - **语料根目录的祖先是符号链接** → **正常收录**。macOS 上
+      ``/var -> /private/var``、``/tmp -> /private/tmp``，临时目录和
+      不少用户主目录都长这样。早期版本用「祖先链里不能出现符号链接」
+      兜底，结果整棵语料被静默丢弃 —— 摄入 0 个文件却报告成功，
+      比直接报错更糟。
+    - 判定「有没有跑出语料根目录」用 **resolve 之后的包含关系**，
+      而不是逐级检查符号链接：resolve 会把祖先的符号链接一并规范化，
+      根目录和文件同步规范化之后，包含关系才有意义。
+    """
     root = Path(root)
     if not root.exists():
         raise FileNotFoundError(f"语料目录不存在: {root}")
-    found = [
-        path
-        for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix.lower() in SUPPORTED_SUFFIXES
-        # 跳过符号链接：指向目录外的链接会把外部内容带进索引
-        and not path.is_symlink()
-        # 目录符号链接下钻也会跑到语料之外
-        and not any(parent.is_symlink() for parent in path.parents)
-    ]
+
+    resolved_root = root.resolve()
+    found: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in SUPPORTED_SUFFIXES:
+            continue
+        # 文件本身是链接 → 跳过（可能指向语料外）
+        if path.is_symlink():
+            continue
+        # resolve 后必须仍在语料根目录内
+        try:
+            resolved = path.resolve()
+        except OSError:  # pragma: no cover - 极少见的路径解析失败
+            continue
+        if not resolved.is_relative_to(resolved_root):
+            continue
+        found.append(path)
     return sorted(found)
 
 
@@ -146,13 +171,22 @@ async def ingest(
     conflicts = set(find_basename_conflicts(files, root))
     for path in files:
         known = path_map.get(path.name)
-        if known is not None and known != str(path):
+        if known is None:
+            continue
+        # 比的是 resolve 之后的真实路径，不是字符串：同一个文件用相对路径
+        # 和绝对路径写出来也不该被判成「两个同名文件」。
+        try:
+            same_file = Path(known).resolve() == path.resolve()
+        except OSError:  # pragma: no cover - 极少见的路径解析失败
+            same_file = False
+        if not same_file:
             conflicts.add(path.name)
 
     if conflicts:
         reason = (
             "文件名与已入库文档冲突（LightRAG 按文件名判重，同名文件无法共存）: "
             + ", ".join(sorted(conflicts))
+            + "。请给冲突文件改名，或清空索引目录（RAG_WORKING_DIR）后重新摄入。"
         )
         return IngestReport(
             failed=tuple(
@@ -160,6 +194,7 @@ async def ingest(
                 for path in files
                 if path.name in conflicts
             ),
+            discovered=len(files),
         )
 
     inserted: list[str] = []
@@ -182,7 +217,9 @@ async def ingest(
         except Exception as exc:
             failed.append((relative, f"{type(exc).__name__}: {exc}"))
             continue
-        path_map[key] = str(path)
+        # 存 resolve 后的绝对路径：后续的冲突判定要拿它和别的路径比较，
+        # 存相对路径的话，换个工作目录就判不出来了。
+        path_map[key] = str(path.resolve())
         inserted.append(relative)
 
     save_path_map(settings.working_dir, path_map)
@@ -190,4 +227,5 @@ async def ingest(
         inserted=tuple(inserted),
         skipped=tuple(skipped),
         failed=tuple(failed),
+        discovered=len(files),
     )

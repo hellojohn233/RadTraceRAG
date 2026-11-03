@@ -91,7 +91,6 @@ src/radtracerag/
 │   ├── answer.py          #   基于证据的回答
 │   ├── markers.py         #   引用标记校验
 │   └── contracts.py       #   通用数据结构
-├── integrations/lightrag.py  # LightRAG 查询接入点
 ├── ui/                    # 演示界面（Streamlit）
 ├── data/                  # 数据集适配层（下一阶段接 SLAKE）
 └── evaluation/            # 检索与问答评测位置

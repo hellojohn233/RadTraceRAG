@@ -150,7 +150,10 @@ async def cmd_ingest(args: argparse.Namespace) -> int:
     async with rag_session(settings) as rag:
         report = await ingest(rag, root, settings)
 
-    print(f"新增 {len(report.inserted)} · 跳过 {len(report.skipped)} · 失败 {len(report.failed)}")
+    print(
+        f"发现 {report.discovered} 个受支持文件 · 新增 {len(report.inserted)} · "
+        f"跳过 {len(report.skipped)} · 失败 {len(report.failed)}"
+    )
     for relative in report.inserted:
         print(f"  + {relative}")
     for relative in report.skipped:
