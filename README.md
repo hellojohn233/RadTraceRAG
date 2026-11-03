@@ -1,7 +1,7 @@
 # RadTraceRAG
 
 <p align="center">
-  <img src="assets/png/logo-lockup-light.png" alt="RadTraceRAG" width="520">
+  <img src="assets/social-preview.png" alt="RadTraceRAG" width="640">
 </p>
 
 **面向医学影像问答的可追溯多模态 RAG 项目。** 通过视觉语言模型理解影像，用 [LightRAG](https://github.com/HKUDS/LightRAG) 检索相关医学知识，并将回答与证据关联起来。
@@ -183,6 +183,9 @@ SLAKE 的参考答案可以用于问答评测，但其 <code>triple</code> 字�
 - [产品业务方向](doc/product-direction.md)：目标用户、使用流程、数据选择和产品边界。
 - [技术栈与实现方案](doc/tech-stack.md)：模块划分、LightRAG 集成方式和评测设计。
 - [界面设计规范](doc/ui-design.md)：配色语义、组件规格和实现约定。
+- [人工验收清单](docs/ACCEPTANCE.md)：填好 `.env` 后的逐步验收步骤与常见故障处理。
+- [引擎底座设计](docs/superpowers/specs/2026-11-03-engine-foundation-design.md) 与
+  [实现计划](docs/superpowers/plans/2026-11-03-engine-foundation.md)：本阶段的设计依据与逐任务步骤。
 
 问答流程可运行后，README 会继续补充数据准备、模型配置和批量评测命令。
 
