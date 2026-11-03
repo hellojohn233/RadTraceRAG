@@ -94,12 +94,19 @@ class MappedFile:
     路径变了但它还是同一个文件 —— 上游按 basename 判重，它依然进不去索引。
     有了内容哈希才能分清「同一个文件搬了家」（跳过）和「另一个同名文件」
     （冲突）。上游自己也是这么分的：``doc_status`` 里有 ``content_hash``。
+
+    ``alias`` 标记这条记录**不是**一次真正的入库：文件被上游判重了
+    （内容与索引里另一份文档相同），上游没有以这个名字建索引。
+    不区分的话，报告会说「已入库」，而实际上索引里根本没有这份文件 ——
+    原件被删掉时，引用的来源路径就指向了一个不存在的文件。
     """
 
     #: 项目根相对（项目内）或绝对（项目外）
     path: str
     #: 文件原始字节的 sha256
     sha256: str = ""
+    #: True = 这份文件本身没进索引（上游判重），它的内容在索引里的另一个文件下
+    alias: bool = False
 
 
 def _file_digest(path: Path) -> str:
@@ -118,11 +125,14 @@ def _file_digest(path: Path) -> str:
 class IngestReport:
     """一次摄入的结果。"""
 
+    #: 真的进索引了（相对路径）
     inserted: tuple[str, ...] = ()
-    #: 已经在 path_map 里、本次没有提交的（相对路径）
-    skipped: tuple[str, ...] = ()
-    #: 被上游判重的（相对路径, 原因）—— 内容已在索引里，不算失败
+    #: 本次没有提交的（相对路径, 原因）—— 已入库 / 内容已变化 / 内容在别的文件名下
+    skipped: tuple[tuple[str, str], ...] = ()
+    #: 内容与索引里另一份文档相同、上游只收了一份的（相对路径, 原因）—— 不算失败
     duplicates: tuple[tuple[str, str], ...] = ()
+    #: 空文档：上游处理了但一个分块都没产生（相对路径, 原因）
+    empty: tuple[tuple[str, str], ...] = ()
     #: (相对路径, 失败原因) 序列
     failed: tuple[tuple[str, str], ...] = ()
     #: 语料目录里发现的受支持文件总数（不管最终入库几个）
@@ -136,12 +146,20 @@ class InsertOutcome:
     ``status`` 取值：
 
     - ``inserted`` —— 真的进索引了
-    - ``skipped`` —— 被上游判重（内容与已入库文档相同）
+    - ``skipped`` —— 本次没有提交（已入库，或内容在索引里的另一个文件下）
+    - ``empty`` —— 上游处理了，但一个分块都没产生（空白文件）
     - ``failed`` —— 上游处理失败，``reason`` 里是上游的原始错误信息
+
+    ``alias`` 表示「这份文件本身没进索引」—— 它的内容在索引里**另一个**
+    文件名下。区别在于：alias 的文件不能说成「已入库」。
     """
 
     status: str
     reason: str = ""
+    #: 上游判重的类型（``filename`` / ``content_hash``）；不是判重时为空
+    duplicate_kind: str = ""
+    #: 这份文件本身没进索引（内容在索引里的另一个文件下）
+    alias: bool = False
 
 
 def _field(record, name: str, default=None):
@@ -163,6 +181,50 @@ def _status_value(raw) -> str:
     """
     value = getattr(raw, "value", raw)
     return str(value).lower()
+
+
+async def _classify_filename_duplicate(store, doc_id: str, original_doc_id: str):
+    """上游说「这个文件名已经在索引里了」—— 要分清是**哪一种**。
+
+    上游的 ``duplicate_kind="filename"`` 有两种截然不同的情况：
+
+    1. **就是我们自己上一轮插的那份**（``original_doc_id == doc_id``）。
+       文件确实在索引里（除非它是个空文档，一个分块都没产生）。
+    2. **索引里这个文件名被另一份内容占着**（``original_doc_id != doc_id``）。
+       我们的内容**根本没进索引** —— 上游按文件名判重，直接把我们丢了。
+       这种情况必须报失败：用户以为入库了，其实检索不到。
+
+    两种都靠 ``doc_status`` 里那条记录自己说话，不猜。
+    """
+    try:
+        own = await store.get_by_id(doc_id)
+    except Exception:  # pragma: no cover - 上游接口变更时的兜底
+        own = None
+
+    if own is not None and _status_value(_field(own, "status")) == "processed":
+        chunks_count = _field(own, "chunks_count", None)
+        if isinstance(chunks_count, int) and chunks_count == 0:
+            # 上一轮就是个空文档：名字占着，但索引里没有它的分块
+            return InsertOutcome(
+                "empty", "空文档：上游没有产生任何分块（文件可能是空白）"
+            )
+        return InsertOutcome("skipped", "已入库", duplicate_kind="filename")
+
+    if original_doc_id and original_doc_id != doc_id:
+        return InsertOutcome(
+            "failed",
+            "文件名已被索引里的另一份文档占用（LightRAG 按文件名判重），"
+            "本次未入库；请给文件改名，或清空索引目录后重新摄入",
+            duplicate_kind="filename",
+        )
+
+    # 判不出原文档是谁 → 保守处理：这份文件本身不算入库
+    return InsertOutcome(
+        "skipped",
+        "内容已在索引中（以其他文件名入库）",
+        duplicate_kind="filename",
+        alias=True,
+    )
 
 
 async def classify_insert(rag, doc_id: str, track_id: str) -> InsertOutcome:
@@ -195,16 +257,26 @@ async def classify_insert(rag, doc_id: str, track_id: str) -> InsertOutcome:
     # 判重记录优先：它说明本次插入被上游拒了
     for _dup_id, dup in same_track.items():
         metadata = _field(dup, "metadata") or {}
-        if metadata.get("is_duplicate"):
-            kind = str(metadata.get("duplicate_kind", "duplicate"))
-            if kind == "filename_conflict":
-                # 上游说「已有多份文档共用这个文件名，得由人来定哪个是原件」——
-                # 这是索引坏了，不能当成正常的跳过。
-                return InsertOutcome(
-                    "failed",
-                    f"索引里已有多份文档共用这个文件名，需要人工修复（{kind}）",
-                )
-            return InsertOutcome("skipped", f"与已入库文档重复（{kind}）")
+        if not metadata.get("is_duplicate"):
+            continue
+        kind = str(metadata.get("duplicate_kind", "duplicate"))
+        original = str(metadata.get("original_doc_id", "") or "")
+        if kind == "filename_conflict":
+            # 上游说「已有多份文档共用这个文件名，得由人来定哪个是原件」——
+            # 这是索引坏了，不能当成正常的跳过。
+            return InsertOutcome(
+                "failed",
+                f"索引里已有多份文档共用这个文件名，需要人工修复（{kind}）",
+            )
+        if kind == "filename":
+            return await _classify_filename_duplicate(store, doc_id, original)
+        # content_hash：内容与索引里另一份文档完全相同 → 内容在，名字不在
+        return InsertOutcome(
+            "skipped",
+            "内容已在索引中（以其他文件名入库）",
+            duplicate_kind=kind,
+            alias=True,
+        )
 
     # 本次 track 下有我们这个 doc_id → 这就是本次插入的真实结果
     record = same_track.get(doc_id)
@@ -219,6 +291,12 @@ async def classify_insert(rag, doc_id: str, track_id: str) -> InsertOutcome:
 
     status = _status_value(_field(record, "status"))
     if status == "processed":
+        # ⚠️ 上游对**空白文件**也会写 ``processed``，但 ``chunks_count`` 是 0 ——
+        # 一个分块都没有，等于什么都没进索引。报成「已入库」是假的，
+        # 而且会把它写进 path_map 永久标成「已入库」。
+        chunks_count = _field(record, "chunks_count", None)
+        if isinstance(chunks_count, int) and chunks_count == 0:
+            return InsertOutcome("empty", "空文档：上游没有产生任何分块（文件可能是空白）")
         return InsertOutcome("inserted")
     reason = (
         _field(record, "error_msg")
@@ -327,6 +405,7 @@ def load_path_map(working_dir: Path) -> dict[str, MappedFile]:
             mapping[str(key)] = MappedFile(
                 path=str(value.get("path", "")),
                 sha256=str(value.get("sha256", "")),
+                alias=bool(value.get("alias", False)),
             )
         else:
             # 旧格式：只有路径
@@ -344,9 +423,13 @@ def save_path_map(
     temp = target.with_suffix(".json.tmp")
     payload = {
         str(key): (
-            {"path": value.path, "sha256": value.sha256}
+            {
+                "path": value.path,
+                "sha256": value.sha256,
+                "alias": value.alias,
+            }
             if isinstance(value, MappedFile)
-            else {"path": str(value), "sha256": ""}
+            else {"path": str(value), "sha256": "", "alias": False}
         )
         for key, value in mapping.items()
     }
@@ -380,8 +463,11 @@ async def ingest(
     """把 ``root`` 下的所有受支持文件写入索引。
 
     - 同名文件（不同目录）→ 计入 ``failed``，**但不影响其他文件入库**；
-    - 已入库的文件 → 计入 ``skipped``；
-    - 被上游判重（内容相同、文件名不同）→ 计入 ``skipped``；
+    - 已入库的文件 → 计入 ``skipped``（带原因）；
+    - 内容在原地改过的文件 → 计入 ``skipped``，原因里明说「索引里仍是旧版本」；
+    - 内容与索引里另一份文档相同（上游按内容判重）→ 计入 ``duplicates``；
+    - 空文档（上游一个分块都没产生）→ 计入 ``empty``，**不写进 path_map**；
+    - 上游按文件名判重、但原文档不是我们的 → 计入 ``failed``（内容根本没进去）；
     - 单个文件抽取或写入失败 → 计入 ``failed``，不影响其他文件。
     """
     root = Path(root)
@@ -395,6 +481,8 @@ async def ingest(
     # 已入库但路径变了、而且内容也一样的文件 → 同一个文件搬了家，跳过。
     # 内容不一样的才是真冲突（LightRAG 只能留一个）。
     relocated: dict[str, str] = {}
+    # 路径没变但内容变了 → 索引里留的还是旧版本，必须明确告诉用户
+    changed: dict[str, str] = {}
     for path in files:
         key = canonical_basename(path)
         known = path_map.get(key)
@@ -409,11 +497,15 @@ async def ingest(
             same_file = _resolve_stored(known_path) == path.resolve()
         except OSError:  # pragma: no cover - 极少见的路径解析失败
             same_file = False
+        digest = _file_digest(path)
         if same_file:
+            # 同一个文件 —— 但内容可能改过。索引里留的还是旧版本，
+            # 说「已入库」是骗人的，必须让用户看见。
+            if known_hash and digest and digest != known_hash:
+                changed[key] = digest
             continue
         # 路径变了但内容一样 → 同一个文件搬了家，上游照样按 basename 判重，
         # 它进不去索引 —— 当作跳过，不算冲突。
-        digest = _file_digest(path)
         if known_hash and digest and digest == known_hash:
             relocated[key] = digest
             continue
@@ -426,8 +518,9 @@ async def ingest(
     )
 
     inserted: list[str] = []
-    skipped: list[str] = []
+    skipped: list[tuple[str, str]] = []
     duplicates: list[tuple[str, str]] = []
+    empty: list[tuple[str, str]] = []
     failed: list[tuple[str, str]] = []
 
     for path in files:
@@ -441,13 +534,34 @@ async def ingest(
             continue
 
         if key in path_map:
+            known = path_map[key]
+            known_alias = bool(getattr(known, "alias", False))
             if key in relocated:
                 # 同一个文件搬了家：更新映射里的位置，不重新摄入
                 path_map[key] = MappedFile(
-                    path=_storable_path(path), sha256=relocated[key]
+                    path=_storable_path(path),
+                    sha256=relocated[key],
+                    alias=known_alias,
                 )
                 save_path_map(settings.working_dir, path_map)
-            skipped.append(relative)
+                skipped.append((relative, "已入库（文件位置已更新）"))
+            elif key in changed:
+                # 内容改过了，索引里留的还是旧版本 —— 必须说清楚，
+                # 不能拿「已入库」糊弄过去。path_map 里的哈希**不更新**，
+                # 否则下一次就看不出索引已经过期了。
+                skipped.append(
+                    (
+                        relative,
+                        "内容已变化，索引里仍是旧版本；"
+                        "如需更新请清空索引目录后重新摄入",
+                    )
+                )
+            elif known_alias:
+                # 这份文件本身没进索引（上游判重），它的内容在索引里
+                # 另一个文件下 —— 说「已入库」是假的。
+                skipped.append((relative, "内容已在索引中（以其他文件名入库）"))
+            else:
+                skipped.append((relative, "已入库"))
             continue
 
         doc_id = build_doc_id(relative)
@@ -470,18 +584,37 @@ async def ingest(
             )
             inserted.append(relative)
         elif outcome.status == "skipped":
-            # 被上游判重：这份文件的内容已经在索引里了（可能以另一个文件名
-            # 存在）。把 path_map 写回去 —— 否则每次重跑都要白跑一遍上游，
+            # 上游拒了这次插入。分两种：
+            #
+            # - alias=False → 就是我们这份文档（上一轮插过），它确实在索引里；
+            # - alias=True  → 内容在索引里**另一个文件名**下，这份文件本身
+            #   没有以这个名字进索引 —— 不能说成「已入库」。
+            #
+            # 两种都把 path_map 写回去 —— 否则每次重跑都要白跑一遍上游，
             # 而 path_map 丢失正是「本次 track 判定」出错的场景。
             path_map[key] = MappedFile(
-                path=_storable_path(path), sha256=_file_digest(path)
+                path=_storable_path(path),
+                sha256=_file_digest(path),
+                alias=outcome.alias,
             )
-            duplicates.append((relative, outcome.reason))
+            if outcome.alias:
+                duplicates.append((relative, outcome.reason))
+            else:
+                skipped.append((relative, outcome.reason))
+        elif outcome.status == "empty":
+            # 空文档：上游处理了，但一个分块都没产生。
+            # **不写 path_map** —— 写进去就等于永久标记「已入库」，
+            # 用户之后往文件里补了内容也再也进不去索引。
+            empty.append((relative, outcome.reason))
+            continue
         else:
             failed.append((relative, outcome.reason))
             continue
 
         # 每插一个就落一次盘：中途被打断也不至于丢掉整张映射表。
+        #
+        # 代价是 O(n²) 次写入（n 个文件 = n 次全量重写）—— 演示级语料
+        # 完全无所谓，语料规模上来要改成「定期批量落盘」。
         save_path_map(settings.working_dir, path_map)
 
     save_path_map(settings.working_dir, path_map)
@@ -489,6 +622,7 @@ async def ingest(
         inserted=tuple(inserted),
         skipped=tuple(skipped),
         duplicates=tuple(duplicates),
+        empty=tuple(empty),
         failed=tuple(failed),
         discovered=len(files),
     )

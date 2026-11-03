@@ -201,7 +201,12 @@ async def test_ingest_after_path_map_loss_reports_duplicates_not_inserted(
         second = await ingest(rag, corpus, settings)
 
     assert second.inserted == (), "上游判重了，本次没有任何新文档入库"
-    assert len(second.duplicates) == 4
+    # 上游报的是「文件名重复」，而原文档就是我们自己的 doc_id ——
+    # 这四份文件确实在索引里（第一轮真插进去了），所以是「已入库」，
+    # 不是「内容与别人重复」。
+    assert len(second.skipped) == 4
+    assert {reason for _name, reason in second.skipped} == {"已入库"}
+    assert second.duplicates == ()
     assert second.failed == ()
 
 
@@ -216,5 +221,5 @@ async def test_ingest_restores_path_map_after_duplicates(
         (settings.working_dir / "path_map.json").unlink()
         second = await ingest(rag, corpus, settings)
 
-    assert len(second.duplicates) == 4
+    assert len(second.skipped) == 4
     assert len(load_path_map(settings.working_dir)) == 4

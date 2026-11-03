@@ -174,7 +174,8 @@ async def test_ingest_second_run_skips_already_indexed(tmp_path, settings_factor
     second = await ingest(_FakeRag(), root, settings)
     assert first.inserted == ("a.md",)
     assert second.inserted == ()
-    assert second.skipped == ("a.md",)
+    assert [name for name, _reason in second.skipped] == ["a.md"]
+    assert second.skipped[0][1] == "已入库"
     assert second.failed == ()
 
 
@@ -278,7 +279,7 @@ async def test_ingest_same_corpus_by_different_path_spellings_is_skipped(
     monkeypatch.chdir(tmp_path)
     second = await ingest(_FakeRag(), Path("corpus"), settings)
     assert second.inserted == ()
-    assert second.skipped == ("a.md",)
+    assert [name for name, _reason in second.skipped] == ["a.md"]
     assert second.failed == ()
 
 
@@ -375,7 +376,8 @@ def test_path_map_survives_project_relocation(tmp_path, settings_factory, monkey
     moved_settings = settings_factory(RAG_WORKING_DIR=str(moved / "proj" / "storage"))
     report2 = asyncio.run(ingest(_FakeRag(), moved / "proj" / "corpus", moved_settings))
     assert report2.failed == (), "搬家后不该有假冲突"
-    assert report2.inserted == () and report2.skipped == ("a.md",)
+    assert report2.inserted == ()
+    assert [name for name, _reason in report2.skipped] == ["a.md"]
 
 
 def test_load_path_map_warns_when_corrupted(tmp_path, capsys):
@@ -410,7 +412,7 @@ async def test_ingest_moved_corpus_outside_project_is_skipped_not_conflict(
 
     second = await ingest(_FakeRag(), moved, settings)
     assert second.failed == (), "搬家不是冲突"
-    assert second.skipped == ("a.md",)
+    assert [name for name, _reason in second.skipped] == ["a.md"]
     # 映射里的位置要更新到新路径
     assert load_path_map(settings.working_dir)["a.md"].path == str((moved / "a.md").resolve())
 
@@ -433,3 +435,240 @@ async def test_ingest_different_file_with_same_name_is_conflict(tmp_path, settin
     assert report.inserted == ()
     assert report.failed and report.failed[0][0] == "a.md"
     assert "冲突" in report.failed[0][1]
+
+
+# --- 第三轮 review 的发现 -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingest_reports_content_changed_in_place(tmp_path, settings_factory):
+    """内容在原地改过的文件，不能再报「已入库」。
+
+    索引里留的还是旧版本 —— 报告说「已入库」是在骗人。这条限制在
+    ``docs/ACCEPTANCE.md`` 里有记录，但清单上的说明用户看不到，
+    必须让工具自己说出来。
+    """
+    root = tmp_path / "corpus"
+    root.mkdir()
+    target = root / "a.md"
+    target.write_text("第一版内容。", encoding="utf-8")
+
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
+    first = await ingest(_FakeRag(), root, settings)
+    assert first.inserted == ("a.md",)
+
+    target.write_text("第二版内容，改过了。", encoding="utf-8")
+    second = await ingest(_FakeRag(), root, settings)
+
+    assert second.inserted == ()
+    assert [name for name, _reason in second.skipped] == ["a.md"]
+    reason = second.skipped[0][1]
+    assert "内容已变化" in reason, reason
+    assert "索引" in reason, reason
+
+
+@pytest.mark.asyncio
+async def test_ingest_keeps_old_hash_when_content_changed(tmp_path, settings_factory):
+    """内容变了也不能更新 path_map 里的哈希 —— 否则下一次就看不出索引过期了。"""
+    root = tmp_path / "corpus"
+    root.mkdir()
+    target = root / "a.md"
+    target.write_text("第一版。", encoding="utf-8")
+
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
+    await ingest(_FakeRag(), root, settings)
+    first_hash = load_path_map(settings.working_dir)["a.md"].sha256
+
+    target.write_text("第二版。", encoding="utf-8")
+    await ingest(_FakeRag(), root, settings)
+
+    assert load_path_map(settings.working_dir)["a.md"].sha256 == first_hash
+
+
+class _FakeDocStatusStore:
+    """只回答「本次 track 下有哪些记录」的假 doc_status。"""
+
+    def __init__(self, records_by_track):
+        self.records_by_track = records_by_track
+
+    async def get_docs_by_track_id(self, track_id):
+        return self.records_by_track.get(track_id, {})
+
+    async def get_by_id(self, doc_id):
+        return None
+
+
+class _StubbornRag:
+    """假装上游「处理成功」但一个分块都没产生的 rag。"""
+
+    def __init__(self, records_by_track):
+        self.doc_status = _FakeDocStatusStore(records_by_track)
+
+    async def ainsert(self, text, ids=None, file_paths=None, **kwargs):
+        return "track-1"
+
+
+@pytest.mark.asyncio
+async def test_empty_document_is_not_reported_as_inserted(tmp_path, settings_factory):
+    """空白文件：上游给 ``processed`` 但 ``chunks_count`` 是 0。
+
+    报成 inserted 是假的 —— 索引里一个分块都没有。而且它会被写进
+    path_map，从此永久标记「已入库」，用户后来补上内容也进不去索引。
+    """
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "blank.md").write_text("   \n\n", encoding="utf-8")
+
+    doc_id = build_doc_id("blank.md")
+    rag = _StubbornRag(
+        {
+            "track-1": {
+                doc_id: {
+                    "doc_id": doc_id,
+                    "status": "processed",
+                    "chunks_count": 0,
+                    "track_id": "track-1",
+                    "metadata": {},
+                }
+            }
+        }
+    )
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
+    report = await ingest(rag, root, settings)
+
+    assert report.inserted == (), "空文档不算入库"
+    assert report.failed == ()
+    assert len(report.empty) == 1
+    assert report.empty[0][0] == "blank.md"
+    # 关键：不能写进 path_map，否则文件补上内容后再也进不去索引
+    assert load_path_map(settings.working_dir) == {}
+
+
+@pytest.mark.asyncio
+async def test_empty_document_is_retried_on_next_run(tmp_path, settings_factory):
+    """空文档没写进 path_map → 下一次 ingest 还会再试它。"""
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "blank.md").write_text("   \n\n", encoding="utf-8")
+
+    doc_id = build_doc_id("blank.md")
+    records = {
+        "track-1": {
+            doc_id: {
+                "doc_id": doc_id,
+                "status": "processed",
+                "chunks_count": 0,
+                "track_id": "track-1",
+                "metadata": {},
+            }
+        }
+    }
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
+    first = await ingest(_StubbornRag(records), root, settings)
+    second = await ingest(_StubbornRag(records), root, settings)
+
+    assert len(first.empty) == 1
+    assert len(second.empty) == 1, "空文档要被反复重试，而不是被当成已入库"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_file_is_marked_as_alias_in_path_map(tmp_path, settings_factory):
+    """被判重的文件本身**没有**进索引，path_map 必须标记出来。
+
+    不标记的话，报告会说「已入库」，而原件被删掉时引用就会指向一个
+    不存在的文件。
+    """
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a.md").write_text("完全一样的内容。", encoding="utf-8")
+
+    doc_id = build_doc_id("a.md")
+    rag = _StubbornRag(
+        {
+            "track-1": {
+                "dup-abc123": {
+                    "doc_id": "dup-abc123",
+                    "status": "failed",
+                    "track_id": "track-1",
+                    "metadata": {"is_duplicate": True, "duplicate_kind": "content_hash"},
+                }
+            }
+        }
+    )
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
+    report = await ingest(rag, root, settings)
+
+    assert report.inserted == ()
+    assert len(report.duplicates) == 1
+    stored = load_path_map(settings.working_dir)
+    assert stored["a.md"].alias is True, "判重的文件要标记成 alias"
+    assert stored["a.md"].path.endswith("a.md")
+
+
+@pytest.mark.asyncio
+async def test_alias_file_is_not_reported_as_already_indexed(tmp_path, settings_factory):
+    """alias 记录再跑一次时，不能说「已入库」—— 它本身没进索引。"""
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a.md").write_text("完全一样的内容。", encoding="utf-8")
+
+    rag = _StubbornRag(
+        {
+            "track-1": {
+                "dup-abc123": {
+                    "doc_id": "dup-abc123",
+                    "status": "failed",
+                    "track_id": "track-1",
+                    "metadata": {"is_duplicate": True, "duplicate_kind": "content_hash"},
+                }
+            }
+        }
+    )
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
+    await ingest(rag, root, settings)
+    second = await ingest(rag, root, settings)
+
+    assert second.inserted == ()
+    assert [name for name, _reason in second.skipped] == ["a.md"]
+    reason = second.skipped[0][1]
+    assert "以其他文件名入库" in reason, reason
+    assert "已入库" not in reason, reason
+
+
+@pytest.mark.asyncio
+async def test_filename_taken_by_another_document_is_a_failure(tmp_path, settings_factory):
+    """上游说「这个文件名已经在索引里了」，但原文档**不是我们的**。
+
+    这说明索引里这个文件名被另一份内容占着 —— 我们的内容根本没进去，
+    却会被当成「已入库」。必须报失败，否则用户以为入库了、检索却查不到。
+    """
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a.md").write_text("我们的内容。", encoding="utf-8")
+
+    rag = _StubbornRag(
+        {
+            "track-1": {
+                "dup-abc123": {
+                    "doc_id": "dup-abc123",
+                    "status": "failed",
+                    "track_id": "track-1",
+                    "metadata": {
+                        "is_duplicate": True,
+                        "duplicate_kind": "filename",
+                        "original_doc_id": "someone-elses-doc-id",
+                    },
+                }
+            }
+        }
+    )
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
+    report = await ingest(rag, root, settings)
+
+    assert report.inserted == ()
+    assert report.duplicates == ()
+    assert report.skipped == ()
+    assert len(report.failed) == 1
+    assert "占用" in report.failed[0][1]
+    # 不写 path_map —— 状态没解决之前不能当成处理过了
+    assert load_path_map(settings.working_dir) == {}
