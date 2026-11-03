@@ -10,6 +10,8 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "lightrag-hku>=1.5.7,<1.6",
+    "openai>=1.60",
+    "pypdf>=6.21.4",
     "streamlit>=1.40",
 ]
 
@@ -19,3 +21,14 @@ radtracerag-ui = "radtracerag.ui.launch:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/radtracerag"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
