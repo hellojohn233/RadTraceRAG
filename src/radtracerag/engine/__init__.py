@@ -10,6 +10,8 @@ from radtracerag.engine.contracts import (
     Evidence,
     RetrievalStep,
 )
+from radtracerag.engine.errors import EngineError
+from radtracerag.engine.evaluate import evaluate
 from radtracerag.engine.markers import (
     extract_markers,
     strip_markers,
@@ -20,9 +22,11 @@ from radtracerag.engine.settings import EngineSettings
 __all__ = [
     "Answer",
     "Document",
+    "EngineError",
     "EngineSettings",
     "Evidence",
     "RetrievalStep",
+    "evaluate",
     "extract_markers",
     "strip_markers",
     "validate_markers",
