@@ -6,8 +6,8 @@
    （``pipeline.py`` 里明确写着「ids outranks docs_format by design」），
    LightRAG 内置的 pypdf 解析只在服务端上传路径生效。所以 PDF 自己抽。
 2. **完整路径**：LightRAG 会把 ``file_path`` 截成 basename，引用里因此
-   看不到目录。我们自己维护 ``path_map.json``（basename → 完整路径），
-   检索时用它还原。
+   看不到目录。我们自己维护 ``path_map.json``（basename → 路径 + 内容哈希），
+   检索时用它还原来源，判冲突时用它分辨「同一个文件」和「另一个同名文件」。
 3. **入库结果**：``ainsert`` **从不因为拒收而抛异常** —— 它把结果写进
    ``doc_status``，返回的只是 track_id。「调用没报错」**不等于**
    「文档被索引了」。所以每次插入后我们都要回 ``doc_status`` 核实。
@@ -25,7 +25,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from radtracerag.engine.settings import EngineSettings
+from radtracerag.engine.settings import PROJECT_ROOT, EngineSettings
 
 #: 支持摄入的文本类后缀
 SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf"}
@@ -37,6 +37,32 @@ try:  # pragma: no cover - 上游改名时走兜底分支
     from lightrag.utils_pipeline import normalize_document_file_path
 except Exception:  # pragma: no cover
     normalize_document_file_path = None
+
+
+def _storable_path(path: Path) -> str:
+    """存进 path_map 的路径形式。
+
+    **项目内的语料存相对项目根的路径**：项目目录搬家（换机器、换路径）后，
+    存绝对路径会把每个文件都误判成「同名冲突」，用户唯一的出路是清空索引
+    重建 —— 而索引本身是可以搬家的。``build_doc_id`` 的文档字符串里也写着
+    「同一个语料目录在不同机器上生成的 doc_id 一致，索引也可以跨机器搬运」。
+
+    **项目外的语料存绝对路径**：那种情况下路径变了就是真的变了，
+    LightRAG 也确实会按文件名判重。
+    """
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+def _resolve_stored(stored: str) -> Path:
+    """把 path_map 里存的路径还原成绝对路径（相对路径按项目根解析）。"""
+    candidate = Path(stored)
+    if candidate.is_absolute():
+        return candidate
+    return (PROJECT_ROOT / candidate).resolve()
 
 
 def canonical_basename(path: Path) -> str:
@@ -61,11 +87,42 @@ def canonical_basename(path: Path) -> str:
 
 
 @dataclass(frozen=True)
+class MappedFile:
+    """path_map 里的一条记录。
+
+    除了路径，还记着**内容哈希**。光比路径不够：文件从 A 目录搬到 B 目录，
+    路径变了但它还是同一个文件 —— 上游按 basename 判重，它依然进不去索引。
+    有了内容哈希才能分清「同一个文件搬了家」（跳过）和「另一个同名文件」
+    （冲突）。上游自己也是这么分的：``doc_status`` 里有 ``content_hash``。
+    """
+
+    #: 项目根相对（项目内）或绝对（项目外）
+    path: str
+    #: 文件原始字节的 sha256
+    sha256: str = ""
+
+
+def _file_digest(path: Path) -> str:
+    """文件内容的 sha256。读不出就返回空串（此时退化成只比路径）。"""
+    try:
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+    except OSError:  # pragma: no cover - 读不了的文件
+        return ""
+
+
+@dataclass(frozen=True)
 class IngestReport:
     """一次摄入的结果。"""
 
     inserted: tuple[str, ...] = ()
+    #: 已经在 path_map 里、本次没有提交的（相对路径）
     skipped: tuple[str, ...] = ()
+    #: 被上游判重的（相对路径, 原因）—— 内容已在索引里，不算失败
+    duplicates: tuple[tuple[str, str], ...] = ()
     #: (相对路径, 失败原因) 序列
     failed: tuple[tuple[str, str], ...] = ()
     #: 语料目录里发现的受支持文件总数（不管最终入库几个）
@@ -111,46 +168,64 @@ def _status_value(raw) -> str:
 async def classify_insert(rag, doc_id: str, track_id: str) -> InsertOutcome:
     """回 ``doc_status`` 核实这份文档到底进没进索引。
 
-    ``ainsert`` 从不因为拒收而抛异常，它只把结果写进 ``doc_status`` 并返回
-    track_id。上游有三种落法：
+    ⚠️ 判据只能是**本次 track_id 下的记录**。
 
-    - **正常处理** → ``doc_status[doc_id].status == "processed"``
-    - **处理失败** → ``doc_status[doc_id].status == "failed"``，带 ``error_msg``
-    - **被判重** → **不会**写进我们传的 doc_id，而是另起一条 ``dup-<hash>``
-      记录（``status=failed``、``metadata.is_duplicate=true``），
-      挂在同一个 track_id 下 → 用 ``get_docs_by_track_id`` 才找得到
+    上一轮跑留下的 processed 行还留在 doc_status 里 —— 直接 ``get_by_id``
+    拿到的是那一行，把「本次被拒收」误判成「已入库」。实测：删掉
+    ``path_map.json`` 再跑 ingest，报告说「新增 4」，上游却建了四条
+    ``dup-*`` 失败记录，实际零入库。
 
-    第三种最危险：调用方看到「没报错」就以为入库了，实际那份文档根本没进索引。
+    上游三种落法：
+
+    - **正常处理** → 本次 track 下有我们这个 doc_id，``status == "processed"``
+    - **被判重** → 本次 track 下只有一条 ``dup-<hash>`` 记录
+      （``metadata.is_duplicate=true``），我们这个 doc_id 不在里面
+    - **处理失败** → 本次 track 下有我们这个 doc_id，``status == "failed"``
     """
     store = getattr(rag, "doc_status", None)
     if store is None:
         # 没有 doc_status 可问（例如测试里的假 rag）→ 无法核实，保持乐观
         return InsertOutcome("inserted")
 
-    record = await store.get_by_id(doc_id)
-    if record:
-        status = _status_value(_field(record, "status"))
-        if status == "processed":
-            return InsertOutcome("inserted")
-        reason = (
-            _field(record, "error_msg")
-            or _field(record, "content_summary")
-            or f"LightRAG 处理状态为 {status}"
-        )
-        return InsertOutcome("failed", str(reason))
-
-    # 我们传的 doc_id 不存在 → 多半是被判重了（上游会另起 dup- 记录）
     try:
-        same_track = await store.get_docs_by_track_id(track_id)
+        same_track = await store.get_docs_by_track_id(track_id) or {}
     except Exception:  # pragma: no cover - 上游接口变更时的兜底
         same_track = {}
-    for _dup_id, dup in (same_track or {}).items():
+
+    # 判重记录优先：它说明本次插入被上游拒了
+    for _dup_id, dup in same_track.items():
         metadata = _field(dup, "metadata") or {}
         if metadata.get("is_duplicate"):
-            kind = metadata.get("duplicate_kind", "duplicate")
+            kind = str(metadata.get("duplicate_kind", "duplicate"))
+            if kind == "filename_conflict":
+                # 上游说「已有多份文档共用这个文件名，得由人来定哪个是原件」——
+                # 这是索引坏了，不能当成正常的跳过。
+                return InsertOutcome(
+                    "failed",
+                    f"索引里已有多份文档共用这个文件名，需要人工修复（{kind}）",
+                )
             return InsertOutcome("skipped", f"与已入库文档重复（{kind}）")
 
-    return InsertOutcome("failed", "LightRAG 未生成该文档的处理记录")
+    # 本次 track 下有我们这个 doc_id → 这就是本次插入的真实结果
+    record = same_track.get(doc_id)
+    if record is None:
+        record = await store.get_by_id(doc_id)
+        # 拿到的可能是上一轮留下的行（track_id 对不上），不能当本次的结果
+        if record is not None and _field(record, "track_id") != track_id:
+            record = None
+
+    if record is None:
+        return InsertOutcome("failed", "LightRAG 未生成本次插入的处理记录")
+
+    status = _status_value(_field(record, "status"))
+    if status == "processed":
+        return InsertOutcome("inserted")
+    reason = (
+        _field(record, "error_msg")
+        or _field(record, "content_summary")
+        or f"LightRAG 处理状态为 {status}"
+    )
+    return InsertOutcome("failed", str(reason))
 
 
 def discover_files(root: Path) -> list[Path]:
@@ -221,26 +296,62 @@ def extract_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def load_path_map(working_dir: Path) -> dict[str, str]:
-    """读取路径映射；文件不存在时返回空字典。"""
+def load_path_map(working_dir: Path) -> dict[str, MappedFile]:
+    """读取路径映射；文件不存在时返回空字典。
+
+    文件损坏时**会告警**再返回空字典 —— 静默返回空字典会让「已入库」的判断
+    彻底失效：所有文件都会被当成没入库重新提交，而上游会按文件名判重、
+    悄悄跳过。我们必须让人看见这张表坏了。
+    """
     path = Path(working_dir) / PATH_MAP_FILENAME
     if not path.exists():
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        print(
+            f"警告: 路径映射文件损坏，已按空映射处理: {path}"
+            f"（{type(exc).__name__}: {exc}）"
+        )
+        print(
+            "      已入库的文件会被重新提交，LightRAG 会按文件名判重并把它们跳过。"
+        )
         return {}
-    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        print(f"警告: 路径映射文件格式不对，已按空映射处理: {path}")
+        return {}
+
+    mapping: dict[str, MappedFile] = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            mapping[str(key)] = MappedFile(
+                path=str(value.get("path", "")),
+                sha256=str(value.get("sha256", "")),
+            )
+        else:
+            # 旧格式：只有路径
+            mapping[str(key)] = MappedFile(path=str(value))
+    return mapping
 
 
-def save_path_map(working_dir: Path, mapping: dict[str, str]) -> None:
+def save_path_map(
+    working_dir: Path, mapping: dict[str, MappedFile | str]
+) -> None:
     """写出路径映射（原子替换，避免写一半被读到）。"""
     directory = Path(working_dir)
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / PATH_MAP_FILENAME
     temp = target.with_suffix(".json.tmp")
+    payload = {
+        str(key): (
+            {"path": value.path, "sha256": value.sha256}
+            if isinstance(value, MappedFile)
+            else {"path": str(value), "sha256": ""}
+        )
+        for key, value in mapping.items()
+    }
     temp.write_text(
-        json.dumps(mapping, ensure_ascii=False, indent=2, sort_keys=True),
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
     temp.replace(target)
@@ -281,19 +392,32 @@ async def ingest(
     # 同一 basename 指向不同文件时，后一个不会被索引 —— 所以必须在这里拦下来，
     # 不能让 ainsert 静默丢掉文档。
     conflicts = set(find_basename_conflicts(files, root))
+    # 已入库但路径变了、而且内容也一样的文件 → 同一个文件搬了家，跳过。
+    # 内容不一样的才是真冲突（LightRAG 只能留一个）。
+    relocated: dict[str, str] = {}
     for path in files:
         key = canonical_basename(path)
         known = path_map.get(key)
         if known is None:
             continue
-        # 比的是 resolve 之后的真实路径，不是字符串：同一个文件用相对路径
-        # 和绝对路径写出来也不该被判成「两个同名文件」。
+        known_path = known.path if isinstance(known, MappedFile) else str(known)
+        known_hash = known.sha256 if isinstance(known, MappedFile) else ""
+        # 比的是解析之后的真实路径，不是字符串：同一个文件用相对路径
+        # 和绝对路径写出来也不该被判成「两个同名文件」；项目整体搬家后
+        # 相对路径跟着搬，也不该变成假冲突。
         try:
-            same_file = Path(known).resolve() == path.resolve()
+            same_file = _resolve_stored(known_path) == path.resolve()
         except OSError:  # pragma: no cover - 极少见的路径解析失败
             same_file = False
-        if not same_file:
-            conflicts.add(key)
+        if same_file:
+            continue
+        # 路径变了但内容一样 → 同一个文件搬了家，上游照样按 basename 判重，
+        # 它进不去索引 —— 当作跳过，不算冲突。
+        digest = _file_digest(path)
+        if known_hash and digest and digest == known_hash:
+            relocated[key] = digest
+            continue
+        conflicts.add(key)
 
     conflict_reason = (
         "文件名与已入库文档冲突（LightRAG 按文件名判重，同名文件无法共存）: "
@@ -303,6 +427,7 @@ async def ingest(
 
     inserted: list[str] = []
     skipped: list[str] = []
+    duplicates: list[tuple[str, str]] = []
     failed: list[tuple[str, str]] = []
 
     for path in files:
@@ -316,6 +441,12 @@ async def ingest(
             continue
 
         if key in path_map:
+            if key in relocated:
+                # 同一个文件搬了家：更新映射里的位置，不重新摄入
+                path_map[key] = MappedFile(
+                    path=_storable_path(path), sha256=relocated[key]
+                )
+                save_path_map(settings.working_dir, path_map)
             skipped.append(relative)
             continue
 
@@ -334,21 +465,30 @@ async def ingest(
         # ainsert 不抛异常不代表入库成功 —— 回 doc_status 核实。
         outcome = await classify_insert(rag, doc_id, str(track_id))
         if outcome.status == "inserted":
-            # 存 resolve 后的绝对路径：后续的冲突判定要拿它和别的路径比较，
-            # 存相对路径的话，换个工作目录就判不出来了。
-            path_map[key] = str(path.resolve())
+            path_map[key] = MappedFile(
+                path=_storable_path(path), sha256=_file_digest(path)
+            )
             inserted.append(relative)
         elif outcome.status == "skipped":
-            # 被判重的文件并没有以自己的名字进索引，不写进 path_map ——
-            # 写进去会让检索时的来源还原指向一个并不存在的引用。
-            skipped.append(relative)
+            # 被上游判重：这份文件的内容已经在索引里了（可能以另一个文件名
+            # 存在）。把 path_map 写回去 —— 否则每次重跑都要白跑一遍上游，
+            # 而 path_map 丢失正是「本次 track 判定」出错的场景。
+            path_map[key] = MappedFile(
+                path=_storable_path(path), sha256=_file_digest(path)
+            )
+            duplicates.append((relative, outcome.reason))
         else:
             failed.append((relative, outcome.reason))
+            continue
+
+        # 每插一个就落一次盘：中途被打断也不至于丢掉整张映射表。
+        save_path_map(settings.working_dir, path_map)
 
     save_path_map(settings.working_dir, path_map)
     return IngestReport(
         inserted=tuple(inserted),
         skipped=tuple(skipped),
+        duplicates=tuple(duplicates),
         failed=tuple(failed),
         discovered=len(files),
     )

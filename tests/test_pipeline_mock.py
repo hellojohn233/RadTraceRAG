@@ -97,11 +97,11 @@ async def test_pipeline_end_to_end_with_mock(tmp_path, settings_factory, mock_mo
         assert report.failed == ()
 
         path_map = load_path_map(settings.working_dir)
-        # key 是 basename，value 是完整路径
+        # key 是 basename，value 记录完整路径（项目外 → 绝对路径）
         assert len(path_map) == 4
-        assert all(str(corpus) in value for value in path_map.values())
+        assert all(str(corpus) in value.path for value in path_map.values())
         liver_key = next(k for k in path_map if k.endswith("02_liver_function.md"))
-        assert path_map[liver_key] == str(corpus / liver_key)
+        assert path_map[liver_key].path == str((corpus / liver_key).resolve())
 
         result = await retrieve(rag, "肝脏做什么", "naive", settings, path_map)
 
@@ -173,5 +173,48 @@ async def test_content_duplicate_is_reported_as_skipped_not_inserted(
         report = await ingest(rag, root, settings)
 
     assert len(report.inserted) == 1, "只有一份能真正进索引"
-    assert len(report.skipped) == 1, "被判重的那份应计入跳过，不是失败"
+    assert len(report.duplicates) == 1, "被判重的那份应单独报出来，不是失败"
+    assert report.skipped == ()
     assert report.failed == ()
+
+
+@pytest.mark.asyncio
+async def test_ingest_after_path_map_loss_reports_duplicates_not_inserted(
+    tmp_path, settings_factory, mock_models, corpus
+):
+    """path_map 丢了之后重跑，不能再报「已入库」。
+
+    上游会按 doc_id 判重：同一份文档第二次插入时，它另起一条 ``dup-*``
+    记录并把这次插入标记为失败。而我们这个 doc_id 在 doc_status 里**还留着
+    上一轮的 processed 行** —— 直接查它会把「本次被拒收」误判成「已入库」。
+
+    判据只能是**本次 track_id** 下的记录。
+    """
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+    async with rag_session(settings) as rag:
+        first = await ingest(rag, corpus, settings)
+        assert len(first.inserted) == 4
+
+        # 模拟 path_map 丢失（文件被删或损坏）
+        (settings.working_dir / "path_map.json").unlink()
+
+        second = await ingest(rag, corpus, settings)
+
+    assert second.inserted == (), "上游判重了，本次没有任何新文档入库"
+    assert len(second.duplicates) == 4
+    assert second.failed == ()
+
+
+@pytest.mark.asyncio
+async def test_ingest_restores_path_map_after_duplicates(
+    tmp_path, settings_factory, mock_models, corpus
+):
+    """被判重的文件仍然要把 path_map 写回去 —— 否则每次重跑都要白跑一遍上游。"""
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+    async with rag_session(settings) as rag:
+        await ingest(rag, corpus, settings)
+        (settings.working_dir / "path_map.json").unlink()
+        second = await ingest(rag, corpus, settings)
+
+    assert len(second.duplicates) == 4
+    assert len(load_path_map(settings.working_dir)) == 4

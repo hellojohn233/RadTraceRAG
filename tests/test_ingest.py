@@ -1,8 +1,12 @@
+import asyncio
+import shutil
 from pathlib import Path
 
 import pytest
 
+from radtracerag.engine.rag import rag_session
 from radtracerag.engine.ingest import (
+    MappedFile,
     build_doc_id,
     discover_files,
     extract_text,
@@ -98,8 +102,10 @@ def test_find_basename_conflicts_empty_when_unique(tmp_path):
 
 
 def test_path_map_roundtrip(tmp_path):
-    save_path_map(tmp_path, {"a.md": "samples/a.md"})
-    assert load_path_map(tmp_path) == {"a.md": "samples/a.md"}
+    save_path_map(tmp_path, {"a.md": MappedFile(path="samples/a.md", sha256="abc")})
+    loaded = load_path_map(tmp_path)
+    assert loaded["a.md"].path == "samples/a.md"
+    assert loaded["a.md"].sha256 == "abc"
 
 
 def test_load_path_map_returns_empty_when_absent(tmp_path):
@@ -130,7 +136,9 @@ async def test_ingest_inserts_and_records_path_map(tmp_path, settings_factory):
     assert report.failed == ()
     assert rag.inserted
     assert rag.inserted[0]["ids"] == [build_doc_id("a.md")]
-    assert load_path_map(settings.working_dir) == {"a.md": str(root / "a.md")}
+    stored = load_path_map(settings.working_dir)
+    assert stored["a.md"].path == str((root / "a.md").resolve())
+    assert stored["a.md"].sha256, "要存内容哈希，用来分辨「同一个文件」和「另一个同名文件」"
 
 
 @pytest.mark.asyncio
@@ -330,4 +338,98 @@ async def test_path_map_key_uses_canonical_basename(tmp_path, settings_factory):
     (root / "a.[native-iet].pdf").write_bytes(_make_pdf_with_text("内容"))
     settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
     await ingest(_FakeRag(), root, settings)
-    assert load_path_map(settings.working_dir) == {"a.pdf": str((root / "a.[native-iet].pdf").resolve())}
+    stored = load_path_map(settings.working_dir)
+    assert stored["a.pdf"].path == str((root / "a.[native-iet].pdf").resolve())
+
+
+# --- 复核发现的边界情况 -------------------------------------------------
+
+
+def test_path_map_survives_project_relocation(tmp_path, settings_factory, monkeypatch):
+    """整个项目搬到别的目录后，同一份语料不该被判成「同名冲突」。
+
+    path_map 存绝对路径的话，搬家后每个文件的路径都变了 → 全量假冲突，
+    用户唯一的选择是清空索引重建。而索引本身是可以搬家的。
+    """
+    from radtracerag.engine import ingest as ingest_mod
+
+    project = tmp_path / "proj"
+    corpus = project / "corpus"
+    corpus.mkdir(parents=True)
+    (corpus / "a.md").write_text("内容。", encoding="utf-8")
+
+    monkeypatch.setattr(ingest_mod, "PROJECT_ROOT", project)
+    settings = settings_factory(RAG_WORKING_DIR=str(project / "storage"))
+    report = asyncio.run(ingest(_FakeRag(), corpus, settings))
+    assert report.inserted == ("a.md",)
+    stored = load_path_map(settings.working_dir)
+    assert stored["a.md"].path == "corpus/a.md", "项目内的路径要存相对项目根的形式"
+    assert stored["a.md"].sha256
+
+    # 搬到别的目录：相对路径跟着项目一起搬，解析后仍然指向同一个文件
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    shutil.move(str(project), str(moved / "proj"))
+    monkeypatch.setattr(ingest_mod, "PROJECT_ROOT", moved / "proj")
+    # 搬家后重新解析配置：工作目录也跟着项目走
+    moved_settings = settings_factory(RAG_WORKING_DIR=str(moved / "proj" / "storage"))
+    report2 = asyncio.run(ingest(_FakeRag(), moved / "proj" / "corpus", moved_settings))
+    assert report2.failed == (), "搬家后不该有假冲突"
+    assert report2.inserted == () and report2.skipped == ("a.md",)
+
+
+def test_load_path_map_warns_when_corrupted(tmp_path, capsys):
+    """损坏的 path_map 不能静默变成空字典 —— 那是「已入库」判断失效的源头。"""
+    (tmp_path / "path_map.json").write_text("{ 不是合法 JSON", encoding="utf-8")
+    assert load_path_map(tmp_path) == {}
+    captured = capsys.readouterr()
+    assert "path_map" in captured.out + captured.err
+
+
+@pytest.mark.asyncio
+async def test_ingest_moved_corpus_outside_project_is_skipped_not_conflict(
+    tmp_path, settings_factory
+):
+    """项目外的语料整体搬了家，也不该被判成「同名冲突」。
+
+    文件还是同一个文件（内容一模一样），上游只是按 basename 判重所以进不去
+    索引 —— 这是「跳过」，不是冲突。光比路径分辨不出来（路径确实变了），
+    要比内容哈希。
+    """
+    original = tmp_path / "before"
+    original.mkdir()
+    (original / "a.md").write_text("完全一样的内容。", encoding="utf-8")
+
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+    first = await ingest(_FakeRag(), original, settings)
+    assert first.inserted == ("a.md",)
+
+    moved = tmp_path / "after"
+    moved.mkdir()
+    shutil.move(str(original / "a.md"), str(moved / "a.md"))
+
+    second = await ingest(_FakeRag(), moved, settings)
+    assert second.failed == (), "搬家不是冲突"
+    assert second.skipped == ("a.md",)
+    # 映射里的位置要更新到新路径
+    assert load_path_map(settings.working_dir)["a.md"].path == str((moved / "a.md").resolve())
+
+
+@pytest.mark.asyncio
+async def test_ingest_different_file_with_same_name_is_conflict(tmp_path, settings_factory):
+    """内容不同的同名文件仍然是冲突 —— 不能因为放宽了就放行。"""
+    first_dir = tmp_path / "one"
+    first_dir.mkdir()
+    (first_dir / "a.md").write_text("第一份内容。", encoding="utf-8")
+
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+    await ingest(_FakeRag(), first_dir, settings)
+
+    second_dir = tmp_path / "two"
+    second_dir.mkdir()
+    (second_dir / "a.md").write_text("完全不同的另一份内容。", encoding="utf-8")
+
+    report = await ingest(_FakeRag(), second_dir, settings)
+    assert report.inserted == ()
+    assert report.failed and report.failed[0][0] == "a.md"
+    assert "冲突" in report.failed[0][1]
