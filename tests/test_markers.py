@@ -80,3 +80,35 @@ def test_validate_markers_keeps_non_marker_text_in_group():
     assert "的数据" in clean
     assert "E1" in clean
     assert valid == ("E1",)
+
+
+# --- 空括号残骸 ---------------------------------------------------------
+
+
+def test_validate_markers_removes_empty_brackets():
+    """模型自己写出来的空括号要整组删掉。
+
+    ``[]`` / ``[ ]`` 里没有任何信息，留着只会让答案看起来像坏掉了。
+    """
+    clean, valid, unsupported = validate_markers("结论 [] 成立 [ ]。", ["E1"])
+    assert "[]" not in clean
+    assert "[ ]" not in clean
+    assert "结论" in clean and "成立" in clean
+    assert valid == ()
+    assert unsupported == ()
+
+
+def test_validate_markers_removes_group_that_became_empty():
+    """摘掉无效编号后只剩空壳的组，整组删掉。"""
+    clean, _valid, unsupported = validate_markers("依据 [E9] 还有正文。", ["E1"])
+    assert "[]" not in clean
+    assert "[ ]" not in clean
+    assert "还有正文" in clean
+    assert unsupported == ("E9",)
+
+
+def test_validate_markers_keeps_group_with_real_text():
+    """摘掉无效编号后还剩着文字的组要留下 —— 那是答案正文。"""
+    clean, _valid, unsupported = validate_markers("依据 [E9 的数据] 结论。", ["E1"])
+    assert "的数据" in clean
+    assert unsupported == ("E9",)

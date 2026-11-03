@@ -69,6 +69,16 @@ def strip_markers(text: str) -> str:
 SEPARATOR_ONLY = re.compile(r"^[\s,;、]*$")
 
 
+def _is_residue(text: str) -> bool:
+    """判断括号里剩下的东西是不是「只剩下残骸」。
+
+    模型自己会写出 ``[]``、``[ ]`` 这样的空括号；把无效编号摘掉之后也可能
+    剩下 ``[ 的数据]`` 这种只剩标点的壳。里面**没有任何字母、数字或汉字**
+    时，这组括号对读者没有信息量 —— 留着只会让答案看起来像坏掉了。
+    """
+    return not any(char.isalnum() for char in text)
+
+
 def _split_group(inner: str) -> list[tuple[str | None, str]]:
     """把方括号内容拆成 ``[(编号 or None, 文字), ...]``。"""
     pieces: list[tuple[str | None, str]] = []
@@ -94,7 +104,9 @@ def validate_markers(
     - 无效编号从正文移除，不给模型编造的引用留下位置；
     - 纯编号的组（``[E1, E9]``）重写成只含有效编号的形式（``[E1]``）；
     - 混着别的文字的组（``[依据 E1 的数据]``）**只摘掉无效编号**，
-      其余文字原样保留 —— 那是答案正文里的内容，不能被吃掉。
+      其余文字原样保留 —— 那是答案正文里的内容，不能被吃掉；
+    - 摘完之后只剩空白/标点的组**整组删掉**（``[]``、``[ ]``、``[/]``）——
+      留着空壳括号只会让答案看起来像坏掉了。
     """
     allowed = set(valid_ids)
     found = extract_markers(text)
@@ -105,7 +117,9 @@ def validate_markers(
         inner = match.group(1)
         markers = _markers_in(inner)
         if not markers:
-            return match.group(0)
+            # 组里根本没有编号：空括号（``[]`` / ``[ ]``）是残骸，整组删掉；
+            # 有内容的组（``[注]`` / ``[1]``）原样保留。
+            return "" if _is_residue(inner) else match.group(0)
 
         pieces = _split_group(inner)
         marker_only = all(
@@ -137,6 +151,9 @@ def validate_markers(
             else ""
             for marker, piece_text in pieces
         )
+        # 摘完只剩空白/标点 → 整组删掉，别在答案里留一个空壳括号
+        if _is_residue(cleaned):
+            return ""
         return "[" + cleaned + "]"
 
     clean = GROUP_PATTERN.sub(_rewrite, text)
