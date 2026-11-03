@@ -182,7 +182,14 @@ def build_embedding_func(settings: EngineSettings) -> EmbeddingFunc:
     """
     client = _make_client(settings)
 
-    async def _embed(texts: list[str], max_token_size: int | None = None) -> np.ndarray:
+    async def _embed(
+        texts: list[str],
+        max_token_size: int | None = None,
+        **kwargs: Any,
+    ) -> np.ndarray:
+        # **kwargs 是刻意留的：LightRAG 官方 openai_embed 也是这个签名。
+        # LightRAG 会传 context（asymmetric 场景）等参数，EmbeddingFunc 会
+        # 弹掉不支持的，但将来多传一个参数也不该让整批 embedding 崩掉。
         payloads = truncate_for_embedding(
             list(texts), max_token_size, settings.embedding_model
         )
