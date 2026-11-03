@@ -43,7 +43,7 @@ def build_rag(settings: EngineSettings) -> LightRAG:
 
 @asynccontextmanager
 async def rag_session(settings: EngineSettings) -> AsyncIterator[LightRAG]:
-    """打开一个可用��� LightRAG 会话，退出时必定落盘。"""
+    """打开一个可用的 LightRAG 会话，退出时必定落盘。"""
     rag = build_rag(settings)
     await rag.initialize_storages()
     try:
