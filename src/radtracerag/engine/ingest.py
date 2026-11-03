@@ -133,15 +133,30 @@ async def ingest(
     """
     root = Path(root)
     files = discover_files(root)
+    path_map = load_path_map(settings.working_dir)
 
-    conflicts = find_basename_conflicts(files, root)
+    # LightRAG 按文件名（basename）判重，且这个判重索引跨批次、跨语料目录生效。
+    # 同一 basename 指向不同文件时，后一个不会被索引 —— 所以必须在这里拦下来，
+    # 不能让 ainsert 静默丢掉文档。
+    conflicts = set(find_basename_conflicts(files, root))
+    for path in files:
+        known = path_map.get(path.name)
+        if known is not None and known != str(path):
+            conflicts.add(path.name)
+
     if conflicts:
-        reason = f"存在同名文件（LightRAG 按文件名归并引用）: {', '.join(conflicts)}"
+        reason = (
+            "文件名与已入库文档冲突（LightRAG 按文件名判重，同名文件无法共存）: "
+            + ", ".join(sorted(conflicts))
+        )
         return IngestReport(
-            failed=tuple((path.name, reason) for path in files),
+            failed=tuple(
+                (path.relative_to(root).as_posix(), reason)
+                for path in files
+                if path.name in conflicts
+            ),
         )
 
-    path_map = load_path_map(settings.working_dir)
     inserted: list[str] = []
     skipped: list[str] = []
     failed: list[tuple[str, str]] = []

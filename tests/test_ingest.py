@@ -126,7 +126,8 @@ async def test_ingest_rejects_basename_conflict(tmp_path, settings_factory):
     settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
     report = await ingest(_FakeRag(), root, settings)
     assert report.inserted == ()
-    assert report.failed and report.failed[0][0] == "a.md"
+    assert report.failed and "a.md" in report.failed[0][0]
+    assert len(report.failed) == 2
 
 
 @pytest.mark.asyncio
@@ -157,6 +158,25 @@ async def test_ingest_missing_root_raises(tmp_path, settings_factory):
     settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
     with pytest.raises(FileNotFoundError):
         await ingest(_FakeRag(), tmp_path / "nope", settings)
+
+
+@pytest.mark.asyncio
+async def test_ingest_rejects_name_conflict_with_already_indexed(tmp_path, settings_factory):
+    """LightRAG 按 basename 跨批次判重 —— 同名不同路径必须被拦下，不能静默丢文档。"""
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "s"))
+    first_root = tmp_path / "one"
+    first_root.mkdir()
+    (first_root / "a.md").write_text("x", encoding="utf-8")
+    first = await ingest(_FakeRag(), first_root, settings)
+    assert first.inserted == ("a.md",)
+
+    second_root = tmp_path / "two"
+    second_root.mkdir()
+    (second_root / "a.md").write_text("y", encoding="utf-8")
+    second = await ingest(_FakeRag(), second_root, settings)
+    assert second.inserted == ()
+    assert second.failed and second.failed[0][0] == "a.md"
+    assert "冲突" in second.failed[0][1]
 
 
 @pytest.mark.asyncio

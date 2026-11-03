@@ -8,7 +8,7 @@
 
 RadTraceRAG 关注一个可以量化的问题：**当问题同时需要看懂影像和使用外部知识时，检索究竟有没有帮助？** 项目会在同一数据与模型设置下比较直接回答、向量检索和图增强检索，公开逐题结果、检索指标与失败案例。
 
-> **当前阶段：项目骨架已建立。** Python 包和 LightRAG 依赖可以安装，环境检查命令可以运行；数据导入、完整问答流程与实验结果仍在开发中。下文的能力与指标是项目目标，不代表已经取得实验结果。
+> **当前阶段：通用引擎层已可跑通。** 语料导入、索引构建、检索、基于证据的回答都在本地跑通了，测试用假模型驱动，无需 API key。演示界面目前仍跑合成样例，医学影像应用层与实验结果仍在开发中。下文的能力与指标是项目目标，不代表已经取得实验结果。
 
 ## 项目目标
 
@@ -49,22 +49,49 @@ flowchart LR
 
 ## 快速开始
 
-项目使用 Python 3.11 和 [uv](https://docs.astral.sh/uv/) 管理环境。在项目根目录运行：
+项目使用 Python 3.11 和 [uv](https://docs.astral.sh/uv/) 管理环境。LLM 与 Embedding 是**两组完全独立的配置**，可以指向不同服务商（很多 OpenAI 兼容服务只提供其中一种）。
 
 ~~~bash
 uv sync
+cp .env.example .env      # 填入两组配置
 uv run radtracerag doctor
 ~~~
 
-<code>doctor</code> 会检查 Python 与 LightRAG 是否可导入，并显示数据和索引目录。它不下载 SLAKE，也不调用模型。完整问答命令会在数据导入和模型配置完成后加入。
+<code>doctor</code> 会真实调用一次 embedding 核对返回维度、调用一次 LLM 测延迟，缺配置时逐项列出缺哪个变量。
+
+引擎层的完整流程：
+
+~~~bash
+uv run radtracerag ingest samples/                          # 建索引，支持 .txt / .md / .pdf
+uv run radtracerag query "肝脏的主要功能是什么？" --mode mix
+~~~
+
+`query` 打印四层：答案（带 <code>[E1]</code> 形式的引用标记）、证据（来源文件 + chunk id）、检索轨迹、引用校验结果。检索模式可选 <code>naive</code> / <code>local</code> / <code>global</code> / <code>mix</code>。
+
+没有 API key 也能验证整条链路：
+
+~~~bash
+uv run pytest -q
+~~~
+
+测试用假模型驱动**真实的** LightRAG 索引与检索，覆盖了「LightRAG 会把文件路径截成 basename」「同名文件会被判重丢弃」这类只有真跑才会暴露的行为。
 
 当前代码按职责分为：
 
 ~~~text
 src/radtracerag/
-├── cli.py                 # 命令入口与环境检查
+├── cli.py                 # 命令入口：doctor / ingest / query / eval
 ├── config.py              # 数据、索引目录配置
-├── contracts.py           # 影像问题、证据和答案的数据结构
+├── contracts.py           # 影像问题、证据和答案的数据结构（医学层）
+├── engine/                # 通用引擎层，语料无关
+│   ├── settings.py        #   配置读取与校验
+│   ├── llm.py             #   LLM 与 Embedding 组装
+│   ├── rag.py             #   LightRAG 实例工厂
+│   ├── ingest.py          #   语料摄入与路径映射
+│   ├── retrieve.py        #   检索与证据编号
+│   ├── answer.py          #   基于证据的回答
+│   ├── markers.py         #   引用标记校验
+│   └── contracts.py       #   通用数据结构
 ├── integrations/lightrag.py  # LightRAG 查询接入点
 ├── ui/                    # 演示界面（Streamlit）
 ├── data/                  # SLAKE 数据适配位置
@@ -145,6 +172,7 @@ SLAKE 的参考答案可以用于问答评测，但其 <code>triple</code> 字�
 
 - [x] 确定产品范围、数据集和评测协议
 - [x] 建立 Python 包、LightRAG 接入点与环境检查命令
+- [x] 通用引擎层：配置、摄入、检索、证据回答、CLI 全部跑通
 - [x] 完成演示界面：影像、答案、证据链与检索轨迹
 - [ ] 固定数据版本，完成知识库导入与证据 ID 规范
 - [ ] 实现无 RAG、向量 RAG、图增强 RAG 三组对照
@@ -163,4 +191,4 @@ SLAKE 的参考答案可以用于问答评测，但其 <code>triple</code> 字�
 
 欢迎围绕数据标注、检索策略、实验设计和结果复现提出建议。提交实验结果时，请同时提供数据版本、模型配置、检索参数及逐题输出，以便复核结论。
 
-开源许可证将在仓库公开发布前确定并加入。
+本项目采用 MIT 许可证。
