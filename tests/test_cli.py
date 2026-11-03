@@ -172,3 +172,79 @@ def test_query_rejects_non_positive_top_k(tmp_path, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert rc == 2
     assert "top-k" in captured.out + captured.err
+
+
+def test_ingest_on_a_file_path_is_rejected(tmp_path, monkeypatch, capsys):
+    """传进来的是个文件时必须报错。
+
+    ``Path.rglob`` 在文件上返回空列表 —— 不拦的话会报「发现 0 个受支持
+    文件」并以 0 退出，看着像成功。
+    """
+    monkeypatch.setattr("radtracerag.cli.EngineSettings", _fake_settings_cls(tmp_path))
+    target = tmp_path / "a.md"
+    target.write_text("内容", encoding="utf-8")
+
+    rc = main(["ingest", str(target)])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "不是目录" in captured.out + captured.err
+
+
+def test_doctor_mentions_env_file_path(tmp_path, monkeypatch, capsys):
+    """doctor 要点名配置文件 —— 变量名拼错时用户得知道去改哪个文件。"""
+    monkeypatch.setattr("radtracerag.cli.EngineSettings", _fake_settings_cls(tmp_path))
+    rc = main(["doctor"])
+    captured = capsys.readouterr()
+    text = captured.out + captured.err
+    assert "配置文件" in text
+    assert ".env" in text
+
+
+class _FakeQueryRag:
+    def __init__(self, payload):
+        self.payload = payload
+
+    async def aquery_data(self, question, param):
+        return self.payload
+
+
+def test_query_indents_every_line_of_evidence_body(tmp_path, monkeypatch, capsys):
+    """证据正文是多行时，每一行都要缩进。
+
+    只缩进第一行的话，后面的行会顶到最左边，看起来像是脱离了证据列表。
+    """
+    import contextlib
+
+    payload = {
+        "status": "success",
+        "data": {
+            "chunks": [
+                {
+                    "reference_id": 1,
+                    "content": "第一行内容\n第二行内容\n第三行内容",
+                    "file_path": "a.md",
+                    "chunk_id": "chunk-1",
+                }
+            ]
+        },
+        "metadata": {"query_mode": "naive"},
+    }
+
+    @contextlib.asynccontextmanager
+    async def _fake(settings):
+        yield _FakeQueryRag(payload)
+
+    async def _fake_complete(prompt, system_prompt=None, settings=None):
+        return "结论 [E1]"
+
+    monkeypatch.setattr("radtracerag.cli.rag_session", _fake)
+    monkeypatch.setattr("radtracerag.engine.answer._complete", _fake_complete)
+    monkeypatch.setattr("radtracerag.cli.EngineSettings", _fake_settings_cls(tmp_path))
+
+    rc = main(["query", "问题"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    out = captured.out
+    assert "第一行内容" in out
+    assert "\n       第二行内容" in out, "续行也要缩进"
+    assert "\n       第三行内容" in out, "续行也要缩进"

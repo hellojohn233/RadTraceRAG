@@ -30,10 +30,13 @@ from radtracerag.engine.ingest import ingest, load_path_map
 from radtracerag.engine.llm import build_llm_func, embed_once
 from radtracerag.engine.rag import rag_session
 from radtracerag.engine.retrieve import retrieve
-from radtracerag.engine.settings import EngineSettings
+from radtracerag.engine.settings import PROJECT_ROOT, EngineSettings
 
 #: 对外暴露的检索模式
 VALID_MODES = ("naive", "local", "global", "mix")
+
+#: 证据正文的缩进（正文多行时每一行都要缩进）
+EVIDENCE_INDENT = "       "
 
 
 def _positive_int(raw: str) -> int:
@@ -109,6 +112,14 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
     except Exception:  # pragma: no cover - 仅在依赖异常时触发
         print("LightRAG 未安装")
 
+    # 配置文件本身也要说清楚 —— 变量名拼错时，用户得知道该去改哪个文件。
+    # （spec §8 把「.env 存在」列为 doctor 的一项检查。）
+    env_path = PROJECT_ROOT / ".env"
+    if env_path.exists():
+        print(f"配置文件: {env_path}（已加载）")
+    else:
+        print(f"配置文件: {env_path}（不存在，配置只能来自进程环境变量）")
+
     settings, errors = _load_settings()
     if settings is None:
         for error in errors:
@@ -164,20 +175,28 @@ async def cmd_ingest(args: argparse.Namespace) -> int:
     if not root.exists():
         print(f"语料目录不存在: {root}")
         return 1
+    if not root.is_dir():
+        # 传进来的是个文件 —— ``rglob`` 在文件上返回空列表，
+        # 于是会报「发现 0 个受支持文件」并以 0 退出，看着像成功。
+        print(f"不是目录: {root}（ingest 需要一个语料目录）")
+        return 1
 
     async with rag_session(settings) as rag:
         report = await ingest(rag, root, settings)
 
     print(
         f"发现 {report.discovered} 个受支持文件 · 新增 {len(report.inserted)} · "
-        f"跳过 {len(report.skipped) + len(report.duplicates)} · 失败 {len(report.failed)}"
+        f"跳过 {len(report.skipped) + len(report.duplicates) + len(report.empty)} · "
+        f"失败 {len(report.failed)}"
     )
     for relative in report.inserted:
         print(f"  + {relative}")
-    for relative in report.skipped:
-        print(f"  = {relative}（已入库）")
+    for relative, reason in report.skipped:
+        print(f"  = {relative}（{reason}）")
     for relative, reason in report.duplicates:
         print(f"  ~ {relative}（{reason}）")
+    for relative, reason in report.empty:
+        print(f"  - {relative}（{reason}）")
     for relative, reason in report.failed:
         print(f"  ! {relative}: {reason}")
 
@@ -209,7 +228,10 @@ async def cmd_query(args: argparse.Namespace) -> int:
         print("  （无）")
     for evidence in result.evidences:
         print(f"  [{evidence.evidence_id}] {evidence.source}  (chunk_id={evidence.chunk_id}, reference_id={evidence.reference_id})")
-        print(f"       {evidence.content}")
+        # 证据正文常是多段的 —— 只缩进第一行的话，后面的行会顶到最左边，
+        # 看起来像是脱离了证据列表。
+        body = evidence.content.replace("\n", "\n" + EVIDENCE_INDENT)
+        print(f"{EVIDENCE_INDENT}{body}")
     print()
     print("检索轨迹")
     for step in result.steps:
