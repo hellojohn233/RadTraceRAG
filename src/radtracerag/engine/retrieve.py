@@ -32,6 +32,7 @@ from typing import Any
 from lightrag import QueryParam
 
 from radtracerag.engine.contracts import Evidence, RetrievalStep
+from radtracerag.engine.errors import EngineError
 from radtracerag.engine.settings import EngineSettings
 
 
@@ -97,6 +98,22 @@ async def retrieve(
     started = time.perf_counter()
     payload = await rag.aquery_data(question, param)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+    # ⚠️ aquery_data **不抛异常**，它把查询失败编码进返回值里
+    # （``{"status": "failure", "message": ...}``）。不检查的话，服务商故障
+    # 会被显示成「没有检索到可用证据」，退出码还是 0 —— CI 会把坏掉的服务
+    # 当成通过。
+    #
+    # 但「没查到结果」是正常结果（上游用 ``failure_reason="no_results"``
+    # 标记它），不能也变成异常。
+    if str(payload.get("status", "success")).lower() == "failure":
+        metadata = payload.get("metadata") or {}
+        failure_reason = str(metadata.get("failure_reason", ""))
+        message = str(payload.get("message", "") or "")
+        if failure_reason == "no_results" or "no results" in message.lower():
+            pass  # 正常但没有命中，交给上层按「无证据」处理
+        else:
+            raise EngineError("检索失败", detail=message or failure_reason)
 
     evidences = evidence_from_payload(payload, path_map)
     metadata = dict(payload.get("metadata") or {})

@@ -108,3 +108,44 @@ async def test_retrieve_returns_steps_and_metadata(settings):
 async def test_retrieve_on_empty_payload_returns_no_evidences(settings):
     res = await retrieve(_FakeRag({"status": "success", "data": {}, "metadata": {}}), "q", "naive", settings, {})
     assert res.evidences == ()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_raises_when_upstream_query_failed(settings):
+    """上游查询失败必须报错，不能当成「没检索到」。
+
+    LightRAG 的 ``aquery_data`` 会捕获查询异常，返回
+    ``{"status": "failure", "message": ...}`` 而不抛异常。不检查的话，
+    服务商故障会被显示成「没有检索到可用证据」，退出码还是 0 ——
+    CI 会把坏掉的服务当成通过。
+    """
+    from radtracerag.engine.errors import EngineError
+
+    class _FailingRag:
+        async def aquery_data(self, query, param):
+            return {
+                "status": "failure",
+                "message": "Query failed: 502 Bad Gateway",
+                "data": {},
+                "metadata": {},
+            }
+
+    with pytest.raises(EngineError) as excinfo:
+        await retrieve(_FailingRag(), "问题", "mix", settings, {})
+    assert "502" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_treats_no_results_as_empty_not_error(settings):
+    """「没查到」是正常结果，不是错误 —— 不能把它也变成异常。"""
+    class _EmptyRag:
+        async def aquery_data(self, query, param):
+            return {
+                "status": "failure",
+                "message": "Query returned no results",
+                "data": {},
+                "metadata": {"failure_reason": "no_results", "mode": "mix"},
+            }
+
+    result = await retrieve(_EmptyRag(), "问题", "mix", settings, {})
+    assert result.evidences == ()
