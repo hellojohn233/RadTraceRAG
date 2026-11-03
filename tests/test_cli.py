@@ -111,3 +111,29 @@ def test_eval_reports_not_built(capsys):
     captured = capsys.readouterr()
     assert rc == 0
     assert "评测集" in captured.out + captured.err
+
+
+def test_doctor_reports_actual_embedding_dimension_on_mismatch(
+    tmp_path, monkeypatch, capsys
+):
+    """服务商的真实维度与配置不符时，必须报出**实际**维度并退出非 0。
+
+    这是 review focus 里点名要钉住的一条 —— 之前行为是对的但没有测试，
+    随时可能悄悄回归。
+    """
+    import numpy as np
+
+    monkeypatch.setattr("radtracerag.cli.EngineSettings", _fake_settings_cls(tmp_path))
+
+    async def _fake_embed_once(settings, text):
+        return np.zeros(768, dtype=np.float32), 768
+
+    monkeypatch.setattr("radtracerag.cli.embed_once", _fake_embed_once)
+
+    rc = main(["doctor"])
+    captured = capsys.readouterr()
+    text = captured.out + captured.err
+    assert rc == 1
+    assert "768" in text, "要报出服务商的真实维度"
+    assert "1024" in text, "也要报出配置的维度"
+    assert "维度不一致" in text

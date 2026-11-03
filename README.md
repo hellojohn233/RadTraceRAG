@@ -90,6 +90,8 @@ src/radtracerag/
 │   ├── retrieve.py        #   检索与证据编号
 │   ├── answer.py          #   基于证据的回答
 │   ├── markers.py         #   引用标记校验
+│   ├── evaluate.py        #   检索指标骨架（recall@k / nDCG@k / MRR）
+│   ├── errors.py          #   引擎层错误类型
 │   └── contracts.py       #   通用数据结构
 ├── ui/                    # 演示界面（Streamlit）
 ├── data/                  # 数据集适配层（下一阶段接 SLAKE）

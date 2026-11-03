@@ -25,6 +25,7 @@ from pathlib import Path
 
 from radtracerag import __version__
 from radtracerag.engine.answer import answer_question
+from radtracerag.engine.errors import EngineError
 from radtracerag.engine.ingest import ingest, load_path_map
 from radtracerag.engine.llm import build_llm_func, embed_once
 from radtracerag.engine.rag import rag_session
@@ -193,6 +194,16 @@ async def cmd_query(args: argparse.Namespace) -> int:
     print("检索轨迹")
     for step in result.steps:
         print(f"  {step.stage}  {step.detail}  {step.elapsed_ms} ms · {step.count} 条")
+
+    # 上游的检索统计：naive 与 mix 的字段不同（naive 只有 chunk 计数，
+    # mix 还有实体/关系），打出来才能直接看出两种模式的差别。
+    processing_info = result.metadata.get("processing_info") or {}
+    if processing_info:
+        print()
+        print("检索统计")
+        for key, value in processing_info.items():
+            print(f"  {key} = {value}")
+
     print()
     if answer.unsupported_markers:
         print(
@@ -200,14 +211,20 @@ async def cmd_query(args: argparse.Namespace) -> int:
             f"已剔除 {len(answer.unsupported_markers)} 个不存在的编号: "
             f"{', '.join(answer.unsupported_markers)}"
         )
-    else:
+    elif answer.evidence_ids:
         print(f"引用校验  {len(answer.evidence_ids)} 个标记全部有效")
+    else:
+        print("引用校验  回答里没有任何引用标记（未使用证据）")
     return 0
 
 
 async def cmd_eval(args: argparse.Namespace) -> int:
     """评测入口。评测集尚未构建。"""
-    print("评测集尚未构建：当前仓库只交付引擎层，评估集与标注规则见设计文档。")
+    print(
+        "评测集尚未构建：当前仓库只交付引擎层。\n"
+        "检索指标计算（recall@k / nDCG@k / MRR）的骨架在 engine/evaluate.py，"
+        "已用内置样本做过自检，但还没有真实评测集与标注规则。"
+    )
     return 0
 
 
@@ -235,6 +252,10 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("已中断", file=sys.stderr)
         return 130
+    except EngineError as exc:
+        # 引擎层可预期的错误（上游服务故障等）：给可读信息，不给 traceback
+        print(f"执行失败: {exc}", file=sys.stderr)
+        return 1
     except Exception as exc:
         print(f"执行失败: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
