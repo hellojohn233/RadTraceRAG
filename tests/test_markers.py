@@ -132,6 +132,13 @@ def test_validate_markers_keeps_empty_markdown_link():
     assert clean == text
 
 
+def test_validate_markers_keeps_link_shape_when_marker_is_invalid():
+    """``[E9](url)`` 里的编号无效时，不能把 Markdown 链接拆成裸 URL。"""
+    clean, _valid, unsupported = validate_markers("见 [E9](https://example.com/a)。", ["E1"])
+    assert "](https://example.com/a)" in clean
+    assert unsupported == ("E9",)
+
+
 def test_validate_markers_drops_dangling_separators():
     """无效编号摘掉后，分隔符不该留下残骸。"""
     clean, _valid, unsupported = validate_markers("[E1 & E9]", ["E1"])

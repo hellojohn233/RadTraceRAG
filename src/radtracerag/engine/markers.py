@@ -156,6 +156,11 @@ def validate_markers(
                 if marker is not None and marker in allowed
             ]
             if not kept:
+                # 整组摘空。后面紧跟 ``(`` → 很可能是 Markdown 链接
+                # ``[E9](url)``：留着空壳 ``[]`` 才能保住链接结构，
+                # 整组删掉会把链接拆成裸 URL。
+                if match.string[match.end() : match.end() + 1] == "(":
+                    return "[]"
                 return ""
             return "[" + ", ".join(kept) + "]"
 
