@@ -141,6 +141,14 @@ class MappedFile:
     ``stale`` 标记**索引里躺着的是旧版本**：文件在入库之后被改过。
     这个标记必须显式存下来 —— 靠哈希比较推断不出来（我们一旦把当前文件
     的哈希写回映射，下一次就看不出索引过期了）。
+
+    ``doc_id`` 记的是**这份内容在索引里挂在哪个 doc_id 下**。
+    这一条不是可有可无的：``build_doc_id`` 是**相对路径**的哈希，而
+    path_map 的 key 是 **basename**（与位置无关）—— 两个口径不一致，
+    文件在语料目录里搬过家之后，按当前相对路径算出来的 doc_id 就查不到
+    上游那条记录 → 误判成「不在索引里」→ 每轮都重新提交 → 上游每轮
+    多一条失败记录，``doc_status.json`` 无限膨胀。
+    记下入库时的 doc_id，查询口径就和记录本身一致了。
     """
 
     #: 项目根相对（项目内）或绝对（项目外）
@@ -151,6 +159,8 @@ class MappedFile:
     alias: bool = False
     #: True = 文件在入库后被改过，索引里仍是旧版本
     stale: bool = False
+    #: 这份内容在索引里对应的 doc_id（查上游要用它，不是当前路径算出来的）
+    doc_id: str = ""
 
 
 
@@ -198,6 +208,9 @@ class InsertOutcome:
 
     ``alias`` 表示「这份文件本身没进索引」—— 它的内容在索引里**另一个**
     文件名下。区别在于：alias 的文件不能说成「已入库」。
+
+    ``doc_id`` 是**这份内容在索引里对应的 doc_id**（被上游判重时是原文档
+    的 doc_id，不是我们自己的）—— 记下来，之后回上游核实才不会用错键。
     """
 
     status: str
@@ -206,6 +219,8 @@ class InsertOutcome:
     duplicate_kind: str = ""
     #: 这份文件本身没进索引（内容在索引里的另一个文件下）
     alias: bool = False
+    #: 这份内容在索引里对应的 doc_id
+    doc_id: str = ""
 
 
 
@@ -225,9 +240,13 @@ def _status_value(raw) -> str:
 
     上游 ``DocStatus`` 是 ``str, Enum``，但 ``str(DocStatus.PROCESSED)``
     得到的是 ``"DocStatus.PROCESSED"`` 而不是 ``"processed"``。
+    落盘的 JSON 里也是这个字符串形式，所以两种都要归一。
     """
     value = getattr(raw, "value", raw)
-    return str(value).lower()
+    text = str(value).lower()
+    if text.startswith("docstatus."):
+        text = text[len("docstatus.") :]
+    return text
 
 
 async def _classify_filename_duplicate(
@@ -266,6 +285,7 @@ async def _classify_filename_duplicate(
                     "上游这一版是空内容占位（当前文件可能已有内容，"
                     "上游不会重新处理）；请给文件改名，或清空索引目录后重新摄入",
                     duplicate_kind="filename",
+                    doc_id=doc_id,
                 )
             stored_hash = str(_field(own, "content_hash", "") or "")
             if stored_hash and current_hash and stored_hash != current_hash:
@@ -275,8 +295,11 @@ async def _classify_filename_duplicate(
                     "内容已变化，索引里仍是旧版本；"
                     "如需更新请给文件改名，或清空索引目录后重新摄入",
                     duplicate_kind="filename",
+                    doc_id=doc_id,
                 )
-            return InsertOutcome("skipped", "已入库", duplicate_kind="filename")
+            return InsertOutcome(
+                "skipped", "已入库", duplicate_kind="filename", doc_id=doc_id
+            )
 
         if status == "failed":
             reason = (
@@ -289,6 +312,7 @@ async def _classify_filename_duplicate(
                 f"{reason}（上游已把这个文档标记为失败，不会自动重试；"
                 "请给文件改名，或清空索引目录后重新摄入）",
                 duplicate_kind="filename",
+                doc_id=doc_id,
             )
 
         # pending / 其它状态：上游还没处理完，不能当成已入库
@@ -297,6 +321,7 @@ async def _classify_filename_duplicate(
             f"上游状态为 {status}，文档尚未处理完成；"
             "请稍后重试，或清空索引目录后重新摄入",
             duplicate_kind="filename",
+            doc_id=doc_id,
         )
 
     # 没有我们自己的记录 → 这份文档从没被我们插进去过
@@ -326,6 +351,7 @@ async def _classify_filename_duplicate(
                     "skipped",
                     "已入库（内容在索引里，doc_id 因文件位置变化而不同）",
                     duplicate_kind="filename",
+                    doc_id=original_doc_id,
                 )
         return InsertOutcome(
             "failed",
@@ -393,14 +419,15 @@ async def classify_insert(
             return await _classify_filename_duplicate(
                 store, doc_id, original, current_hash
             )
-        # content_hash：内容与索引里另一份文档完全相同 → 内容在，名字不在
+        # content_hash：内容与索引里另一份文档完全相同 → 内容在，名字不在。
+        # 记住原文档的 doc_id —— 这份内容就挂在它下面。
         return InsertOutcome(
             "skipped",
             "内容已在索引中（以其他文件名入库）",
             duplicate_kind=kind,
             alias=True,
+            doc_id=original or doc_id,
         )
-
 
     # 本次 track 下有我们这个 doc_id → 这就是本次插入的真实结果
     record = same_track.get(doc_id)
@@ -423,14 +450,15 @@ async def classify_insert(
                 "empty",
                 "上游这一版是空内容占位（当前文件可能已有内容，"
                 "上游不会重新处理）；请给文件改名，或清空索引目录后重新摄入",
+                doc_id=doc_id,
             )
-        return InsertOutcome("inserted")
+        return InsertOutcome("inserted", doc_id=doc_id)
     reason = (
         _field(record, "error_msg")
         or _field(record, "content_summary")
         or f"LightRAG 处理状态为 {status}"
     )
-    return InsertOutcome("failed", str(reason))
+    return InsertOutcome("failed", str(reason), doc_id=doc_id)
 
 
 def discover_files(root: Path) -> list[Path]:
@@ -517,21 +545,37 @@ def extract_text(path: Path) -> str:
     raw = path.read_bytes()
     try:
         return raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        # 「少量坏字节的 UTF-8」：替换后的损坏比例很低就接受，
-        # 总比整篇按别的编码猜一遍强。
-        repaired = raw.decode("utf-8", errors="replace")
-        damaged = repaired.count("\ufffd")
-        if damaged <= max(1, len(raw) // 100):
-            return repaired
-        # Windows 工具链导出的中文文件常见 GBK/GB18030
-        try:
-            return raw.decode("gb18030")
-        except UnicodeDecodeError:
-            raise ValueError(
-                f"文件既不是 UTF-8 也不是 GB18030（已损坏约 {damaged} 个字符），"
-                f"请转存为 UTF-8: {path}"
-            ) from exc
+    except UnicodeDecodeError:
+        pass
+
+    # 严格 UTF-8 解不开 → 判断这是「UTF-8 里混了几个坏字节」还是「另一种编码」
+    repaired = raw.decode("utf-8", errors="replace")
+    damaged = repaired.count("\ufffd")
+    # ⚠️ 分母必须是**高位字节数**，不能是文件总长度。
+    # 用总长度的话，一份 GBK 中文 + 大量 ASCII 填充的文档会被算成
+    # 「损坏比例很低」而直接接受替换结果 —— 中文正文被静默毁掉，
+    # 报告还是绿的。这恰恰是中文语料最常见的形态（英文术语 + 中文段落）。
+    high_bytes = sum(1 for byte in raw if byte >= 0x80)
+    if high_bytes and damaged * 4 <= high_bytes:
+        # 坏字节不到高位字节的四分之一 → 认为是 UTF-8 里混了几个坏字节
+        return repaired
+
+    # 高位字节大面积无效 → 换一种编码试试（GBK/GB18030）
+    try:
+        text = raw.decode("gb18030")
+    except UnicodeDecodeError as gb_exc:
+        raise ValueError(
+            f"文件既不是 UTF-8 也不是 GB18030（已损坏约 {damaged} 个字符），"
+            f"请转存为 UTF-8: {path}"
+        ) from gb_exc
+
+    # ⚠️ 二进制文件有可能**恰好**被 gb18030 解出来（随机二进制命中概率
+    # 极低，但 PNG/ZIP 之类不是零风险）。解出来的文本里有 NUL 或大量
+    # 控制字符 → 判定为二进制，拒绝入库。
+    control = sum(1 for ch in text if ord(ch) < 32 and ch not in "\n\r\t")
+    if "\x00" in text or control > len(text) // 20:
+        raise ValueError(f"文件看起来是二进制内容，不是文本: {path}")
+    return text
 
 
 
@@ -568,6 +612,7 @@ def load_path_map(working_dir: Path) -> dict[str, MappedFile]:
                 sha256=str(value.get("sha256", "")),
                 alias=bool(value.get("alias", False)),
                 stale=bool(value.get("stale", False)),
+                doc_id=str(value.get("doc_id", "") or ""),
             )
         else:
             # 旧格式：只有路径
@@ -590,9 +635,16 @@ def save_path_map(
                 "sha256": value.sha256,
                 "alias": value.alias,
                 "stale": value.stale,
+                "doc_id": value.doc_id,
             }
             if isinstance(value, MappedFile)
-            else {"path": str(value), "sha256": "", "alias": False, "stale": False}
+            else {
+                "path": str(value),
+                "sha256": "",
+                "alias": False,
+                "stale": False,
+                "doc_id": "",
+            }
         )
         for key, value in mapping.items()
     }
@@ -638,32 +690,43 @@ async def _lookup_indexed_row(rag, doc_id: str) -> tuple[bool, object]:
 
 
 async def _verify_indexed(
-    rag, path: Path, doc_id: str, known_hash: str
+    rag, path: Path, doc_id: str, known_hash: str, digest: str = ""
 ) -> tuple[str, object]:
     """核实这份文件**是不是真的在索引里**，以及索引里是哪一版。
 
     返回 ``(状态, 上游记录)``，状态取值：
 
-    - ``"indexed"``  —— 在索引里，内容与文件一致
-    - ``"stale"``   —— 在索引里，但索引里是**旧版本**
-    - ``"missing"`` —— **不在**索引里（上游没有这一行，或这一行不是 processed）
-    - ``"unknown"`` —— 没有 doc_status 可问，无法核实（测试里的假 rag）
+    - ``"indexed"``       —— 在索引里，内容与文件一致
+    - ``"stale"``         —— 在索引里，但索引里是**旧版本**
+    - ``"missing"``       —— **不在**索引里（上游没有这一行）
+    - ``"not_processed"`` —— 上游有这一行，但状态不是 processed（失败/处理中）
+    - ``"unknown"``       —— 没有 doc_status 可问，无法核实（测试里的假 rag）
 
     ⚠️ 只信 path_map 是不够的：索引可能被**外部**改动过 —— 用户手动删了
     文档、或删了索引文件却留下了 path_map.json。那种情况下 path_map 说
     「已入库」，索引里其实什么都没有；而因为每轮都跳过，这份文档
     **永远补不回来**（这与刚修掉的 C-1 是同一族失败）。
+
+    ⚠️ ``doc_id`` 必须是**这份内容在索引里对应的那个** doc_id —— 用当前
+    相对路径算出来的 doc_id 查，文件在语料目录里搬过家之后就查不到了，
+    会被误判成「不在索引里」→ 每轮重新提交 → 上游的失败记录无限增长。
     """
     can_ask, row = await _lookup_indexed_row(rag, doc_id)
+    if can_ask:
+        if row is None:
+            return "missing", None
+        if _status_value(_field(row, "status")) != "processed":
+            return "not_processed", row
+
+    # 内容版本比较 —— **本地就能做**，不依赖上游。
+    # 顺序很重要：即使没有 doc_status 可问（测试里的假 rag），
+    # 「索引里是旧版本」这件事也必须看得出来。
+    if known_hash:
+        if digest and digest != known_hash:
+            return "stale", row
+        return "indexed", row
     if not can_ask:
         return "unknown", None
-    if row is None:
-        return "missing", None
-    if _status_value(_field(row, "status")) != "processed":
-        return "missing", row
-    if known_hash:
-        # 文件字节没变 → 索引里就是这一版（不用再抽文本比对）
-        return "indexed", row
     # 旧格式的记录没有内容哈希 → 用上游那行的 content_hash 对一次，
     # 对上了就能把当前文件的哈希回填进去，之后过期检测就能用了。
     row_hash = str(_field(row, "content_hash", "") or "")
@@ -707,11 +770,11 @@ async def ingest(
     # 已入库但路径变了、而且内容也一样的文件 → 同一个文件搬了家，跳过。
     # 内容不一样的才是真冲突（LightRAG 只能留一个）。
     relocated: dict[str, str] = {}
-    # 路径没变但内容变了 → 索引里留的还是旧版本，必须明确告诉用户
-    changed: dict[str, str] = {}
     # 别名文件（内容在索引里另一个文件名下）的内容变了 → 它的 basename 在
     # 上游是空闲的（当初是按**内容**判重的），可以重新提交一次。
     alias_changed: set[str] = set()
+    # 当前文件的字节哈希（核实时要用来和「索引里那一版」比）
+    digests: dict[str, str] = {}
     for path in files:
         key = canonical_basename(path)
         known = path_map.get(key)
@@ -728,14 +791,12 @@ async def ingest(
         except OSError:  # pragma: no cover - 极少见的路径解析失败
             same_file = False
         digest = _file_digest(path)
+        digests[key] = digest
         if same_file:
-            # 同一个文件 —— 但内容可能改过。索引里留的还是旧版本，
-            # 说「已入库」是骗人的，必须让用户看见。
-            if known_hash and digest and digest != known_hash:
-                if known_alias:
-                    alias_changed.add(key)
-                else:
-                    changed[key] = digest
+            # 同一个文件 —— 内容可能改过。索引里留的还是旧版本时，
+            # 由 _verify_indexed 判成 stale 并如实报告。
+            if known_alias and known_hash and digest and digest != known_hash:
+                alias_changed.add(key)
             continue
         # 路径变了但内容一样 → 同一个文件搬了家，上游照样按 basename 判重，
         # 它进不去索引 —— 当作跳过，不算冲突。
@@ -766,106 +827,107 @@ async def ingest(
             failed.append((relative, conflict_reason))
             continue
 
-        if key in path_map and key not in alias_changed:
+        if key in path_map:
             known = path_map[key]
             known_alias = bool(getattr(known, "alias", False))
             known_stale = bool(getattr(known, "stale", False))
             known_hash = known.sha256 if isinstance(known, MappedFile) else ""
+            # 这份内容在索引里对应的 doc_id —— **不是**当前相对路径算出来的。
+            # 文件在语料目录里搬过家之后，相对路径变了、doc_id 也就变了，
+            # 拿新 doc_id 去查上游必然查不到 → 误判成「不在索引里」→
+            # 每轮重新提交 → 上游的失败记录无限增长。
+            known_doc_id = getattr(known, "doc_id", "") or build_doc_id(relative)
+            digest = digests.get(key, "")
 
-            if key in relocated:
-                # 同一个文件搬了家：更新映射里的位置，不重新摄入
+            # ⚠️ 上游核实必须放在**所有**分支之前。
+            # stale / relocated / alias 三条分支如果直接 continue，
+            # 索引里的文档被外部删掉时我们就永远发现不了 —— 报告会说
+            # 「索引里仍是旧版本」，而上游一条记录都没有，文档永久丢失。
+            state, row = await _verify_indexed(
+                rag, path, known_doc_id, known_hash, digest
+            )
+
+
+            if key in alias_changed:
+                # 别名文件的内容变了 → 删掉别名记录，重新提交一次。
+                # 上游当初是按**内容**判重才拒的，那个 basename 在上游是
+                # 空闲的，新内容完全可以以这个名字入库。
+                path_map.pop(key, None)
+            elif state == "missing":
+                # 索引里没有这份文档 → 重新提交一次
+                # （上游此时已不拒收 —— doc_id 已经从 doc_status 里消失）
+                path_map.pop(key, None)
+            elif state == "not_processed":
+                # 上游有这一行，但不是 processed → **失败**，不是已入库。
+                # 记住 doc_id：下一轮直接核实，不再重复提交（上游每轮一条
+                # 失败记录会无限膨胀）。
+                upstream_status = _status_value(_field(row, "status"))
+                detail = (
+                    _field(row, "error_msg")
+                    or _field(row, "content_summary")
+                    or ""
+                )
+                message = (
+                    f"{detail}（上游状态 {upstream_status}）"
+                    if detail
+                    else f"上游状态 {upstream_status}"
+                )
+                failed.append(
+                    (
+                        relative,
+                        f"{message}；上游不会重新处理这个文档，"
+                        "请给文件改名，或清空索引目录后重新摄入",
+                    )
+                )
                 path_map[key] = MappedFile(
                     path=_storable_path(path),
-                    sha256=relocated[key],
-                    alias=known_alias,
-                    stale=False,
+                    sha256=known_hash,
+                    doc_id=known_doc_id,
                 )
                 save_path_map(settings.working_dir, path_map)
-                skipped.append((relative, "已入库（文件位置已更新）"))
                 continue
-
-            if key in changed:
-                # 内容改过了，索引里留的还是旧版本 —— 必须说清楚，
-                # 不能拿「已入库」糊弄过去。path_map 里的哈希**不更新**
-                # （它记的是「索引里那一版」的哈希），另外打上 stale 标记，
-                # 这样即使 path_map 丢了、我们把当前文件的哈希写了回去，
-                # 下一次仍然看得出索引已经过期。
+            elif state == "stale":
+                # 索引里躺着的是旧版本 —— 必须说清楚，不能拿「已入库」糊弄。
                 path_map[key] = MappedFile(
                     path=_storable_path(path),
                     sha256=known_hash,
                     alias=known_alias,
                     stale=True,
+                    doc_id=known_doc_id,
                 )
                 save_path_map(settings.working_dir, path_map)
                 skipped.append((relative, STALE_REASON))
                 continue
-
-            if known_stale:
-                if known_hash:
-                    # 内容又和索引里那一版一致了 —— 用户把内容改回去了，
-                    # 索引其实是最新的。
+            else:
+                # indexed / unknown → 报告「已入库」这一类的口径
+                if key in relocated:
+                    # 同一个文件搬了家：更新映射里的位置，不重新摄入
                     path_map[key] = MappedFile(
                         path=_storable_path(path),
-                        sha256=known_hash,
+                        sha256=relocated[key],
                         alias=known_alias,
                         stale=False,
+                        doc_id=known_doc_id,
                     )
                     save_path_map(settings.working_dir, path_map)
+                    skipped.append((relative, "已入库（文件位置已更新）"))
+                elif known_alias:
+                    # 这份文件本身没进索引（上游按内容判重），它的内容在索引里
+                    # 另一个文件下 —— 说「已入库」是假的。
+                    skipped.append((relative, "内容已在索引中（以其他文件名入库）"))
+                else:
+                    if not known_hash or known_stale:
+                        # 旧格式的记录没有哈希 → 把当前文件的哈希回填进去；
+                        # 之前标过过期、现在内容又对上了 → 过期标记清掉。
+                        path_map[key] = MappedFile(
+                            path=_storable_path(path),
+                            sha256=digest or known_hash,
+                            stale=False,
+                            doc_id=known_doc_id,
+                        )
+                        save_path_map(settings.working_dir, path_map)
                     skipped.append((relative, "已入库"))
-                    continue
-                # 索引里那一版的哈希我们不知道（path_map 丢过）→ 保守地
-                # 继续报「索引里是旧版本」，直到用户重建索引。
-                path_map[key] = MappedFile(
-                    path=_storable_path(path),
-                    sha256=known_hash,
-                    alias=known_alias,
-                    stale=True,
-                )
-                save_path_map(settings.working_dir, path_map)
-                skipped.append((relative, STALE_REASON))
                 continue
-
-            if known_alias:
-                # 这份文件本身没进索引（上游按内容判重），它的内容在索引里
-                # 另一个文件下 —— 说「已入库」是假的。
-                skipped.append((relative, "内容已在索引中（以其他文件名入库）"))
-                continue
-
-            # 最普通的情况：path_map 说「已入库」—— 但**不能只信 path_map**。
-            # 索引可能被外部改动过（手动删文档、删索引文件却留下 path_map），
-            # 那种情况下索引里其实什么都没有，而且因为每轮都跳过，
-            # 这份文档永远补不回来。回上游核实一次。
-            state, row = await _verify_indexed(
-                rag, path, build_doc_id(relative), known_hash
-            )
-            if state in ("indexed", "unknown"):
-                if state == "indexed" and not known_hash and row is not None:
-                    # 旧格式的记录没有哈希 → 把当前文件的哈希回填进去
-                    path_map[key] = MappedFile(
-                        path=_storable_path(path), sha256=_file_digest(path)
-                    )
-                    save_path_map(settings.working_dir, path_map)
-                skipped.append((relative, "已入库"))
-                continue
-            if state == "stale":
-                path_map[key] = MappedFile(
-                    path=_storable_path(path),
-                    sha256=known_hash,
-                    alias=known_alias,
-                    stale=True,
-                )
-                save_path_map(settings.working_dir, path_map)
-                skipped.append((relative, STALE_REASON))
-                continue
-            # missing：索引里没有这份文档 → 重新提交一次
-            # （上游此时已不拒收 —— doc_id 已经从 doc_status 里消失了）
-            path_map.pop(key, None)
-
-        # 别名文件的内容变了：删掉别名记录，重新提交一次。
-        # 上游当初是按**内容**判重才拒的，那个 basename 在上游是空闲的，
-        # 新内容完全可以以这个名字入库 —— 不需要重建整个索引。
-        if key in alias_changed:
-            path_map.pop(key, None)
 
         doc_id = build_doc_id(relative)
         try:
@@ -884,7 +946,9 @@ async def ingest(
         outcome = await classify_insert(rag, doc_id, str(track_id), current_hash)
         if outcome.status == "inserted":
             path_map[key] = MappedFile(
-                path=_storable_path(path), sha256=_file_digest(path)
+                path=_storable_path(path),
+                sha256=_file_digest(path),
+                doc_id=outcome.doc_id or doc_id,
             )
             inserted.append(relative)
         elif outcome.status == "skipped":
@@ -900,6 +964,7 @@ async def ingest(
                 path=_storable_path(path),
                 sha256=_file_digest(path),
                 alias=outcome.alias,
+                doc_id=outcome.doc_id or doc_id,
             )
             if outcome.alias:
                 duplicates.append((relative, outcome.reason))
@@ -913,6 +978,7 @@ async def ingest(
                 path=_storable_path(path),
                 sha256="",
                 stale=True,
+                doc_id=outcome.doc_id or doc_id,
             )
             skipped.append((relative, outcome.reason))
         elif outcome.status == "empty":
@@ -923,6 +989,14 @@ async def ingest(
             continue
         else:
             failed.append((relative, outcome.reason))
+            # 失败的文档也记住 doc_id：下一轮直接核实上游状态，
+            # 不再重复提交（上游每轮一条失败记录会无限膨胀）。
+            if outcome.doc_id:
+                path_map[key] = MappedFile(
+                    path=_storable_path(path),
+                    sha256=_file_digest(path),
+                    doc_id=outcome.doc_id,
+                )
             continue
 
         # 每插一个就落一次盘：中途被打断也不至于丢掉整张映射表。

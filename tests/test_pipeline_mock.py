@@ -248,8 +248,19 @@ async def test_failed_document_is_reported_as_failed_on_retry(
     assert second.duplicates == (), "不能谎报成「已在索引中」"
     assert second.failed, "必须报成失败"
     assert "simulated upstream LLM failure" in second.failed[0][1]
-    # 更关键：不许把它写进 path_map（写了就永久静默消失）
-    assert load_path_map(settings.working_dir) == {}
+    # 失败的文档要**记住 doc_id**：下一轮直接核实上游状态，不再重复提交。
+    # 否则上游每轮多一条失败记录，doc_status.json 无限膨胀。
+    stored = load_path_map(settings.working_dir)
+    assert stored, "失败的文档也要记住 doc_id"
+    assert all(entry.doc_id for entry in stored.values())
+
+    async with rag_session(settings) as rag:
+        before = _count_doc_status_rows(settings)
+        third = await ingest(rag, corpus, settings)
+        after = _count_doc_status_rows(settings)
+
+    assert third.failed, "第三轮仍然要报失败"
+    assert after == before, "失败的文档不能每轮都再提交一次（上游失败记录会无限增长）"
 
 
 @pytest.mark.asyncio
@@ -306,6 +317,17 @@ async def test_ingest_restores_path_map_after_duplicates(
     assert len(load_path_map(settings.working_dir)) == 4
 
 
+def _count_doc_status_rows(settings) -> int:
+    """数上游 doc_status 里有多少行（含 dup-* 记录）。
+
+    每轮 ingest 都多几行 → 说明我们在重复提交注定失败的文档。
+    """
+    path = settings.working_dir / "kv_store_doc_status.json"
+    if not path.exists():
+        return 0
+    return len(json.loads(path.read_text(encoding="utf-8")))
+
+
 @pytest.mark.asyncio
 async def test_document_deleted_from_index_is_reingested(
     tmp_path, settings_factory, mock_models, corpus
@@ -360,3 +382,83 @@ async def test_moved_file_with_lost_path_map_is_not_a_failure(
 
     assert second.failed == (), "内容在索引里，不该报失败"
     assert any("已入库" in reason for _name, reason in second.skipped), second.skipped
+
+
+@pytest.mark.asyncio
+async def test_moved_files_do_not_grow_upstream_records(
+    tmp_path, settings_factory, mock_models
+):
+    """文件搬过家之后反复 ingest，上游的记录数**不能增长**。
+
+    踩过的坑：核实「这份文档在不在索引里」时，用的是**当前相对路径**算出来的
+    doc_id —— 而 path_map 的 key 是 basename（与位置无关）。文件在语料目录里
+    搬过家 → 相对路径变了 → doc_id 变了 → 查上游必然查不到 → 误判成
+    「不在索引里」→ 每轮重新提交 → 上游每轮多一条 dup-* 失败记录，
+    doc_status.json 无限膨胀（实测 18→32→46→60→74 KB）。
+
+    修法：path_map 记住「这份内容在索引里挂在哪个 doc_id 下」。
+    """
+    work = tmp_path / "work"
+    corpus = work / "corpus"
+    (corpus / "sub").mkdir(parents=True)
+    settings = settings_factory(RAG_WORKING_DIR=str(work / "storage"))
+    for index in range(3):
+        (corpus / "sub" / f"moved_{index}.md").write_text(
+            f"文件 {index} 的内容。\n", encoding="utf-8"
+        )
+
+    async with rag_session(settings) as rag:
+        first = await ingest(rag, corpus, settings)
+        assert len(first.inserted) == 3
+        rows_after_first = _count_doc_status_rows(settings)
+
+    # 搬到根目录
+    for index in range(3):
+        shutil.move(
+            str(corpus / "sub" / f"moved_{index}.md"),
+            str(corpus / f"moved_{index}.md"),
+        )
+
+    for _round in range(3):
+        async with rag_session(settings) as rag:
+            report = await ingest(rag, corpus, settings)
+        assert report.failed == ()
+        assert report.inserted == ()
+        rows = _count_doc_status_rows(settings)
+        assert rows == rows_after_first, (
+            f"上游记录数不该增长：{rows_after_first} → {rows}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_upstream_row_not_processed_is_reported_as_failure(
+    tmp_path, settings_factory, mock_models
+):
+    """上游那一行存在但状态不是 processed → 报失败，不能报「已入库」。
+
+    上游有这一行、状态是 pending → 文档**不在索引里**（没处理完），
+    报成「已入库」就是谎报。
+
+    ⚠️ 改状态必须用**内存 API**：上游的 doc_status 是进程级共享命名空间，
+    ``initialize()`` 只在首次读磁盘文件 —— 同进程内改文件没有任何效果。
+    """
+    work = tmp_path / "work"
+    corpus = work / "corpus"
+    corpus.mkdir(parents=True)
+    settings = settings_factory(RAG_WORKING_DIR=str(work / "storage"))
+    (corpus / "pending.md").write_text("内容。\n", encoding="utf-8")
+
+    async with rag_session(settings) as rag:
+        first = await ingest(rag, corpus, settings)
+        assert first.inserted == ("pending.md",)
+
+        doc_id = build_doc_id("pending.md")
+        row = await rag.doc_status.get_by_id(doc_id)
+        row["status"] = "DocStatus.PENDING"
+        await rag.doc_status.upsert({doc_id: row})
+
+        second = await ingest(rag, corpus, settings)
+
+    assert second.inserted == ()
+    assert second.failed, "上游状态不是 processed，必须报失败"
+    assert not any("已入库" in reason for _name, reason in second.skipped)

@@ -507,16 +507,20 @@ async def test_ingest_keeps_old_hash_when_content_changed(tmp_path, settings_fac
 
 
 class _FakeDocStatusStore:
-    """只回答「本次 track 下有哪些记录」的假 doc_status。"""
+    """只回答「本次 track 下有哪些记录」「这个 doc_id 的行是什么」的假 doc_status。"""
 
     def __init__(self, records_by_track):
         self.records_by_track = records_by_track
+        self.rows = {}
+        for records in records_by_track.values():
+            for key, row in records.items():
+                self.rows[key] = row
 
     async def get_docs_by_track_id(self, track_id):
         return self.records_by_track.get(track_id, {})
 
     async def get_by_id(self, doc_id):
-        return None
+        return self.rows.get(doc_id)
 
 
 class _StubbornRag:
@@ -640,6 +644,7 @@ async def test_alias_file_is_not_reported_as_already_indexed(tmp_path, settings_
     root.mkdir()
     (root / "a.md").write_text("完全一样的内容。", encoding="utf-8")
 
+    original_id = "doc-original-xyz"
     rag = _StubbornRag(
         {
             "track-1": {
@@ -647,8 +652,20 @@ async def test_alias_file_is_not_reported_as_already_indexed(tmp_path, settings_
                     "doc_id": "dup-abc123",
                     "status": "failed",
                     "track_id": "track-1",
-                    "metadata": {"is_duplicate": True, "duplicate_kind": "content_hash"},
-                }
+                    "metadata": {
+                        "is_duplicate": True,
+                        "duplicate_kind": "content_hash",
+                        "original_doc_id": original_id,
+                    },
+                },
+                # 原文档（内容真正所在的那一份）确实在索引里
+                original_id: {
+                    "doc_id": original_id,
+                    "status": "processed",
+                    "chunks_count": 1,
+                    "track_id": "track-0",
+                    "metadata": {},
+                },
             }
         }
     )
@@ -661,6 +678,8 @@ async def test_alias_file_is_not_reported_as_already_indexed(tmp_path, settings_
     reason = second.skipped[0][1]
     assert "以其他文件名入库" in reason, reason
     assert "已入库" not in reason, reason
+    # 别名记录必须记住「内容挂在哪个 doc_id 下」—— 否则下一轮查不到它
+    assert load_path_map(settings.working_dir)["a.md"].doc_id == original_id
 
 
 @pytest.mark.asyncio
