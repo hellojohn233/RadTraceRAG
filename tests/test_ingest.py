@@ -118,6 +118,27 @@ def test_extract_text_reads_markdown(tmp_path):
     assert "正文" in extract_text(p)
 
 
+def test_extract_text_decodes_gb18030(tmp_path):
+    """GBK/GB18030 中文文件必须正确解码，不能变成 U+FFFD 乱码。
+
+    早先的写法是 ``errors="replace"`` —— 解码失败的部分被静默替换成
+    U+FFFD，一整篇中文变成乱码写进索引，报告照样显示「已入库」。
+    """
+    p = tmp_path / "gbk.md"
+    p.write_bytes("肝脏负责代谢和解毒。\n".encode("gb18030"))
+    text = extract_text(p)
+    assert "肝脏负责代谢和解毒" in text
+    assert "\ufffd" not in text
+
+
+def test_extract_text_rejects_undecodable_bytes(tmp_path):
+    """既不是 UTF-8 也不是 GB18030 的内容必须报错，不能静默乱码。"""
+    p = tmp_path / "bin.md"
+    p.write_bytes(bytes(range(256)) * 4)
+    with pytest.raises(ValueError):
+        extract_text(p)
+
+
 def test_extract_text_reads_pdf(tmp_path):
     p = tmp_path / "a.pdf"
     p.write_bytes(_make_pdf_with_text("Liver handles metabolism"))
@@ -545,8 +566,13 @@ async def test_empty_document_is_not_reported_as_inserted(tmp_path, settings_fac
 
 
 @pytest.mark.asyncio
-async def test_empty_document_is_retried_on_next_run(tmp_path, settings_factory):
-    """空文档没写进 path_map → 下一次 ingest 还会再试它。"""
+async def test_empty_document_stays_an_empty_placeholder(tmp_path, settings_factory):
+    """空文档会一直是「上游空内容占位」。
+
+    上游的 doc_status 过滤只看键在不在、不看状态 → doc_id 一旦进过
+    doc_status 就**永久拒收重插**。所以空文档补上内容后重跑也不会被
+    重新处理 —— 报告必须一直如实说「占位」，不能让人以为补内容就能救。
+    """
     root = tmp_path / "corpus"
     root.mkdir()
     (root / "blank.md").write_text("   \n\n", encoding="utf-8")
@@ -568,7 +594,9 @@ async def test_empty_document_is_retried_on_next_run(tmp_path, settings_factory)
     second = await ingest(_StubbornRag(records), root, settings)
 
     assert len(first.empty) == 1
-    assert len(second.empty) == 1, "空文档要被反复重试，而不是被当成已入库"
+    assert len(second.empty) == 1, "空文档每次都被报成占位（上游不会重新处理）"
+    assert "不会重新处理" in second.empty[0][1]
+    assert load_path_map(settings.working_dir) == {}, "空文档不进路径映射"
 
 
 @pytest.mark.asyncio

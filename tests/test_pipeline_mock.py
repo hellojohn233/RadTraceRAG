@@ -11,13 +11,14 @@
 
 import hashlib
 import json
+import shutil
 
 import numpy as np
 import pytest
 from lightrag.utils import EmbeddingFunc
 
 from radtracerag.engine.answer import answer_question
-from radtracerag.engine.ingest import ingest, load_path_map
+from radtracerag.engine.ingest import build_doc_id, ingest, load_path_map
 from radtracerag.engine.rag import rag_session
 from radtracerag.engine.retrieve import retrieve
 
@@ -303,3 +304,59 @@ async def test_ingest_restores_path_map_after_duplicates(
 
     assert len(second.skipped) == 4
     assert len(load_path_map(settings.working_dir)) == 4
+
+
+@pytest.mark.asyncio
+async def test_document_deleted_from_index_is_reingested(
+    tmp_path, settings_factory, mock_models, corpus
+):
+    """索引里的文档被外部删掉后，重跑 ingest 必须把它补回去。
+
+    path_map 还在、文档却不在索引里了 —— 只信 path_map 就会一直报
+    「已入库」，而这份文档**永远补不回来**（每轮都跳过）。
+    这与刚修掉的 C-1 是同一族失败：谎报「已入库」= 静默丢文档。
+    """
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+    async with rag_session(settings) as rag:
+        first = await ingest(rag, corpus, settings)
+        assert len(first.inserted) == 4
+
+        target = sorted(corpus.iterdir())[0]
+        doc_id = build_doc_id(target.name)
+        await rag.adelete_by_doc_id(doc_id)
+
+        second = await ingest(rag, corpus, settings)
+
+    assert second.inserted == (target.name,), "索引里没有的文档必须重新入库"
+    assert second.failed == ()
+
+
+@pytest.mark.asyncio
+async def test_moved_file_with_lost_path_map_is_not_a_failure(
+    tmp_path, settings_factory, mock_models
+):
+    """文件在语料目录里搬过家 + path_map 丢失 → 不能报失败。
+
+    相对路径变了 → 我们的 doc_id 变了；basename 没变 → 上游按文件名判重，
+    把我们拒了。但**内容其实在索引里**（挂在原 doc_id 下）。
+    不查原文档那行的 content_hash 就报失败的话：退出码变 1（破坏
+    「ingest 幂等」的承诺），而且因为不写 path_map，每一轮都失败。
+    """
+    work = tmp_path / "work"
+    corpus = work / "corpus"
+    (corpus / "sub").mkdir(parents=True)
+    settings = settings_factory(RAG_WORKING_DIR=str(work / "storage"))
+    body = "搬过家的内容。\n"
+    (corpus / "sub" / "moved.md").write_text(body, encoding="utf-8")
+
+    async with rag_session(settings) as rag:
+        first = await ingest(rag, corpus, settings)
+        assert first.inserted == ("sub/moved.md",)
+
+        shutil.move(str(corpus / "sub" / "moved.md"), str(corpus / "moved.md"))
+        (settings.working_dir / "path_map.json").unlink()
+
+        second = await ingest(rag, corpus, settings)
+
+    assert second.failed == (), "内容在索引里，不该报失败"
+    assert any("已入库" in reason for _name, reason in second.skipped), second.skipped
