@@ -112,3 +112,32 @@ def test_validate_markers_keeps_group_with_real_text():
     clean, _valid, unsupported = validate_markers("依据 [E9 的数据] 结论。", ["E1"])
     assert "的数据" in clean
     assert unsupported == ("E9",)
+
+
+def test_validate_markers_keeps_emoji_and_symbols():
+    """emoji、全角符号是正文，不能当成残骸删掉。
+
+    之前的判定是「组内没有字母数字就是残骸」—— 那会把 ``[😀]``、``[㎡]``
+    这类**正文**删掉。
+    """
+    for text in ("[😀] 表情", "[㎡] 平方", "[—] 破折号"):
+        clean, _valid, _unsupported = validate_markers(text, ["E1"])
+        assert clean == text, text
+
+
+def test_validate_markers_keeps_empty_markdown_link():
+    """``[](url)`` 是 Markdown 链接，空的是链接文字，不是残骸。"""
+    text = "[](https://example.com) 链接"
+    clean, _valid, _unsupported = validate_markers(text, ["E1"])
+    assert clean == text
+
+
+def test_validate_markers_drops_dangling_separators():
+    """无效编号摘掉后，分隔符不该留下残骸。"""
+    clean, _valid, unsupported = validate_markers("[E1 & E9]", ["E1"])
+    assert clean == "[E1]"
+    assert unsupported == ("E9",)
+
+    clean, _valid, unsupported = validate_markers("[E9/E10]", ["E1"])
+    assert clean == ""
+    assert unsupported == ("E9", "E10")

@@ -66,17 +66,25 @@ def strip_markers(text: str) -> str:
 
 
 #: 只由分隔符与空白组成的内容
-SEPARATOR_ONLY = re.compile(r"^[\s,;、]*$")
+#:
+#: 这些字符在编号之间只起连接作用 —— 摘掉无效编号之后它们不该留下残骸。
+#: ``&`` 和 ``/`` 也在内：``[E1 & E9]`` 里的 ``&``、``[E9/E10]`` 里的 ``/``
+#: 都是分隔符而不是正文。
+SEPARATOR_ONLY = re.compile(r"^[\s,;、&/]*$")
 
 
 def _is_residue(text: str) -> bool:
-    """判断括号里剩下的东西是不是「只剩下残骸」。
+    """判断括号里剩下的东西是不是「残骸」。
 
-    模型自己会写出 ``[]``、``[ ]`` 这样的空括号；把无效编号摘掉之后也可能
-    剩下 ``[ 的数据]`` 这种只剩标点的壳。里面**没有任何字母、数字或汉字**
-    时，这组括号对读者没有信息量 —— 留着只会让答案看起来像坏掉了。
+    只剩空白或分隔符时，这组括号对读者没有信息量 —— 留着只会让答案看起来
+    像坏掉了。
+
+    ⚠️ 判定用「有没有非空白非分隔符的字符」，**不是**「有没有字母数字」：
+    emoji（``[😀]``）、全角标点（``[㎡]``）、Markdown 链接（``[](url)``）
+    都是**正文**，删掉它们就是在毁掉答案。
     """
-    return not any(char.isalnum() for char in text)
+    return not text.strip() or SEPARATOR_ONLY.match(text) is not None
+
 
 
 def _split_group(inner: str) -> list[tuple[str | None, str]]:
@@ -105,8 +113,9 @@ def validate_markers(
     - 纯编号的组（``[E1, E9]``）重写成只含有效编号的形式（``[E1]``）；
     - 混着别的文字的组（``[依据 E1 的数据]``）**只摘掉无效编号**，
       其余文字原样保留 —— 那是答案正文里的内容，不能被吃掉；
-    - 摘完之后只剩空白/标点的组**整组删掉**（``[]``、``[ ]``、``[/]``）——
-      留着空壳括号只会让答案看起来像坏掉了。
+    - 摘完之后只剩空白/分隔符的组**整组删掉**（``[]``、``[ ]``、``[/]``）——
+      留着空壳括号只会让答案看起来像坏掉了；
+    - emoji、全角标点、Markdown 链接这类**正文**不会被误删。
     """
     allowed = set(valid_ids)
     found = extract_markers(text)
@@ -117,9 +126,15 @@ def validate_markers(
         inner = match.group(1)
         markers = _markers_in(inner)
         if not markers:
+            if not _is_residue(inner):
+                return match.group(0)
+            # 后面紧跟 ``(`` → 很可能是 Markdown 链接 ``[](url)``：
+            # 空的是链接文字，不是残骸。删掉它会把链接拆成裸 URL。
+            if match.string[match.end() : match.end() + 1] == "(":
+                return match.group(0)
             # 组里根本没有编号：空括号（``[]`` / ``[ ]``）是残骸，整组删掉；
             # 有内容的组（``[注]`` / ``[1]``）原样保留。
-            return "" if _is_residue(inner) else match.group(0)
+            return ""
 
         pieces = _split_group(inner)
         marker_only = all(
@@ -150,8 +165,8 @@ def validate_markers(
             if marker is None or marker in allowed
             else ""
             for marker, piece_text in pieces
-        )
-        # 摘完只剩空白/标点 → 整组删掉，别在答案里留一个空壳括号
+        ).strip()
+        # 摘完只剩空白/分隔符 → 整组删掉，别在答案里留一个空壳括号
         if _is_residue(cleaned):
             return ""
         return "[" + cleaned + "]"
