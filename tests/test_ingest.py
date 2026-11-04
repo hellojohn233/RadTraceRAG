@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import shutil
 from pathlib import Path
 
@@ -537,8 +539,10 @@ class _StubbornRag:
 async def test_empty_document_is_not_reported_as_inserted(tmp_path, settings_factory):
     """空白文件：上游给 ``processed`` 但 ``chunks_count`` 是 0。
 
-    报成 inserted 是假的 —— 索引里一个分块都没有。而且它会被写进
-    path_map，从此永久标记「已入库」，用户后来补上内容也进不去索引。
+    报成 inserted 是假的 —— 索引里一个分块都没有。它**要**记住 doc_id
+    （上游的 doc_status 过滤只看键在不在 → 这个 doc_id 永久拒收重插 →
+    不记住的话每轮都会重提一次，上游每轮多一条记录），但**不能**因此
+    被当成「已入库」。
     """
     root = tmp_path / "corpus"
     root.mkdir()
@@ -565,8 +569,11 @@ async def test_empty_document_is_not_reported_as_inserted(tmp_path, settings_fac
     assert report.failed == ()
     assert len(report.empty) == 1
     assert report.empty[0][0] == "blank.md"
-    # 关键：不能写进 path_map，否则文件补上内容后再也进不去索引
-    assert load_path_map(settings.working_dir) == {}
+    # 记住 doc_id → 下一轮直接认出「空占位」，不再重提
+    mapping = load_path_map(settings.working_dir)
+    assert mapping["blank.md"].doc_id == doc_id
+    # 但**不能**被当成「已入库」
+    assert report.skipped == ()
 
 
 @pytest.mark.asyncio
@@ -600,7 +607,9 @@ async def test_empty_document_stays_an_empty_placeholder(tmp_path, settings_fact
     assert len(first.empty) == 1
     assert len(second.empty) == 1, "空文档每次都被报成占位（上游不会重新处理）"
     assert "不会重新处理" in second.empty[0][1]
-    assert load_path_map(settings.working_dir) == {}, "空文档不进路径映射"
+    # 记住 doc_id → 下一轮不再重提（上游每轮重提都会多一条记录）
+    mapping = load_path_map(settings.working_dir)
+    assert mapping["blank.md"].doc_id == doc_id
 
 
 @pytest.mark.asyncio
@@ -674,8 +683,13 @@ async def test_alias_file_is_not_reported_as_already_indexed(tmp_path, settings_
     second = await ingest(rag, root, settings)
 
     assert second.inserted == ()
-    assert [name for name, _reason in second.skipped] == ["a.md"]
-    reason = second.skipped[0][1]
+    # 别名归 ``duplicates`` 桶（CLI 打 ``~``）—— 验收清单里这条现象写的就是
+    # ``~ xxx.md（内容已在索引中（以其他文件名入库））``。
+    # 两轮 ingest 的标记必须一致：第一轮走上游判重、第二轮走 path_map 别名
+    # 记录，落到不同的桶就等于报告不幂等。
+    assert [name for name, _reason in second.duplicates] == ["a.md"]
+    assert second.skipped == ()
+    reason = second.duplicates[0][1]
     assert "以其他文件名入库" in reason, reason
     assert "已入库" not in reason, reason
     # 别名记录必须记住「内容挂在哪个 doc_id 下」—— 否则下一轮查不到它
@@ -719,3 +733,105 @@ async def test_filename_taken_by_another_document_is_a_failure(tmp_path, setting
     assert "占用" in report.failed[0][1]
     # 不写 path_map —— 状态没解决之前不能当成处理过了
     assert load_path_map(settings.working_dir) == {}
+
+
+@pytest.mark.asyncio
+async def test_old_format_path_map_record_gets_doc_id_backfilled(
+    tmp_path, settings_factory
+):
+    """旧格式的 path_map 记录（有哈希、没有 doc_id）必须把 doc_id 补上。
+
+    没有 doc_id 的话，「文件在语料目录里搬过家」这一层保护就不生效 ——
+    我们只能按当前相对路径算出一个**错的** doc_id 去查上游，必然查不到
+    → 误判成「不在索引里」→ 每轮重新提交一次。
+    """
+    root = tmp_path / "corpus"
+    root.mkdir()
+    target = root / "a.md"
+    target.write_text("一段正文。", encoding="utf-8")
+
+    doc_id = build_doc_id("a.md")
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    working = tmp_path / "s"
+    working.mkdir()
+    # 旧格式：有 path 和 sha256，没有 doc_id
+    (working / "path_map.json").write_text(
+        json.dumps({"a.md": {"path": str(target.resolve()), "sha256": digest}}),
+        encoding="utf-8",
+    )
+
+    rag = _StubbornRag(
+        {
+            "track-1": {
+                doc_id: {
+                    "doc_id": doc_id,
+                    "status": "processed",
+                    "chunks_count": 1,
+                    "track_id": "track-1",
+                    "metadata": {},
+                }
+            }
+        }
+    )
+    settings = settings_factory(RAG_WORKING_DIR=str(working))
+    report = await ingest(rag, root, settings)
+
+    assert report.inserted == ()
+    assert report.skipped, "已经在索引里了，应报跳过"
+    mapping = load_path_map(settings.working_dir)
+    assert mapping["a.md"].doc_id == doc_id, "旧格式记录必须回填 doc_id"
+
+
+@pytest.mark.asyncio
+async def test_not_processed_branch_keeps_alias_and_stale_flags(
+    tmp_path, settings_factory
+):
+    """上游那行不是 processed 时，alias / stale 标记不能被清零。
+
+    清零的话，下一轮原文档恢复正常之后，这条记录会被当成「自己入库的」
+    报「已入库」—— 而它其实是别名（内容在别的文件名下），口径是错的。
+    """
+    root = tmp_path / "corpus"
+    root.mkdir()
+    target = root / "a.md"
+    target.write_text("一段正文。", encoding="utf-8")
+
+    original_id = "doc-original-xyz"
+    working = tmp_path / "s"
+    working.mkdir()
+    (working / "path_map.json").write_text(
+        json.dumps(
+            {
+                "a.md": {
+                    "path": str(target.resolve()),
+                    "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                    "alias": True,
+                    "stale": True,
+                    "doc_id": original_id,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rag = _StubbornRag(
+        {
+            "track-1": {
+                original_id: {
+                    "doc_id": original_id,
+                    "status": "failed",
+                    "error_msg": "上游处理失败",
+                    "track_id": "track-1",
+                    "metadata": {},
+                }
+            }
+        }
+    )
+    settings = settings_factory(RAG_WORKING_DIR=str(working))
+    report = await ingest(rag, root, settings)
+
+    assert report.failed, "上游不是 processed → 报失败"
+    mapping = load_path_map(settings.working_dir)
+    assert mapping["a.md"].alias is True, "alias 标记被清零了"
+    assert mapping["a.md"].stale is True, "stale 标记被清零了"
+    assert mapping["a.md"].doc_id == original_id

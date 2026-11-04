@@ -44,6 +44,17 @@ STALE_REASON = (
     "如需更新请给文件改名，或清空索引目录后重新摄入"
 )
 
+#: 「上游只留了个空内容占位」时的统一措辞。
+#:
+#: 上游对**空白文件**（以及没有文字层的扫描版 PDF）也会写 ``processed``，
+#: 但 ``chunks_count`` 是 0 —— 一个分块都没有，等于什么都没进索引。
+#: 而上游的 doc_status 过滤只看键在不在、不看状态 → 这个 doc_id 一旦进过
+#: 就**永久拒收重插** → 重跑 ingest 是没有用的，只有改名或重建索引两条路。
+EMPTY_REASON = (
+    "上游这一版是空内容占位（当前文件可能已有内容，上游不会重新处理）；"
+    "请给文件改名，或清空索引目录后重新摄入"
+)
+
 try:  # pragma: no cover - 上游改名时走兜底分支
     from lightrag.utils_pipeline import normalize_document_file_path
 except Exception:  # pragma: no cover
@@ -55,6 +66,12 @@ try:  # pragma: no cover - 上游改名时走兜底分支
 except Exception:  # pragma: no cover
     sanitize_text_for_encoding = None
     compute_text_content_hash = None
+
+try:  # pragma: no cover - 上游改名时走兜底分支
+    from lightrag.base import SourceConflict, SourceUnique
+except Exception:  # pragma: no cover
+    SourceConflict = None
+    SourceUnique = None
 
 
 def content_hash_of(text: str) -> str:
@@ -282,8 +299,7 @@ async def _classify_filename_duplicate(
                 # （上游的 doc_status 过滤只看键在不在，不看状态）。
                 return InsertOutcome(
                     "empty",
-                    "上游这一版是空内容占位（当前文件可能已有内容，"
-                    "上游不会重新处理）；请给文件改名，或清空索引目录后重新摄入",
+                    EMPTY_REASON,
                     duplicate_kind="filename",
                     doc_id=doc_id,
                 )
@@ -448,8 +464,7 @@ async def classify_insert(
         if isinstance(chunks_count, int) and chunks_count == 0:
             return InsertOutcome(
                 "empty",
-                "上游这一版是空内容占位（当前文件可能已有内容，"
-                "上游不会重新处理）；请给文件改名，或清空索引目录后重新摄入",
+                EMPTY_REASON,
                 doc_id=doc_id,
             )
         return InsertOutcome("inserted", doc_id=doc_id)
@@ -459,6 +474,151 @@ async def classify_insert(
         or f"LightRAG 处理状态为 {status}"
     )
     return InsertOutcome("failed", str(reason), doc_id=doc_id)
+
+
+async def _probe_source(store, basename: str) -> tuple[str, str, object]:
+    """问上游：这个规范文件名在索引里有几份主记录、是谁。
+
+    返回 ``(状态, doc_id, 行)``：
+
+    - ``("absent", "", None)``    —— 没有主记录，这个文件名在上游是空闲的
+    - ``("unique", doc_id, 行)``  —— 有一份主记录占着这个文件名
+    - ``("conflict", "", None)``  —— 有**多份**主记录共用这个文件名（索引坏了）
+    - ``("unknown", "", None)``   —— 上游接口不可用，问不到（降级：照常提交）
+
+    ⚠️ 判「几份」必须用 strict 版本（``resolve_doc_source_strict``）：
+    ``get_doc_by_file_basename`` 只返回**其中一份**，会把「索引坏了」
+    （多份共用一个文件名）伪装成「有一份」，然后我们拿那一份去比对内容，
+    比出个假结论（比如把别人的文档说成「已入库」）。
+
+    ⚠️ strict 版本是 fail-closed 的：存储不可用时它**抛异常**而不是返回
+    「没有」。所以这里的异常一律降级成 ``"unknown"`` —— 问不到就照常提交，
+    让上游去判，我们再按上游的真实结果收场。问不到只是白跑一趟，
+    判错才会写错结论。
+    """
+    if SourceConflict is not None and SourceUnique is not None:
+        try:
+            resolution = await store.resolve_doc_source_strict(basename)
+        except Exception:  # pragma: no cover - 上游接口变更/存储不可用时的兜底
+            # ⚠️ strict 是 **fail-closed** 的：抛异常 = **问不到**，不是「没有」。
+            # 宁可问不到（照常提交，让上游去判），也不要猜。
+            return "unknown", "", None
+        if isinstance(resolution, SourceConflict):
+            return "conflict", "", None
+        if isinstance(resolution, SourceUnique):
+            owner_id = str(resolution.doc_id or "")
+            # strict 给的是**精简投影**（没有 content_hash），要拿完整的那一行
+            # 才能比内容 —— 少了这一步，「文件搬过家、内容没变」会被误判成
+            # 「文件名被占用」。
+            try:
+                owner_row = await store.get_by_id(owner_id)
+            except Exception:  # pragma: no cover - 上游接口变更时的兜底
+                owner_row = None
+            return "unique", owner_id, owner_row
+        return "absent", "", None
+
+    # 降级路径：只能判「有没有」，判不出「有几份」
+    try:
+        found = await store.get_doc_by_file_basename(basename)
+    except Exception:  # pragma: no cover - 上游接口变更/存储不可用时的兜底
+        return "unknown", "", None
+    if not found:
+        return "absent", "", None
+    found_id, found_row = found
+    return "unique", str(found_id or ""), found_row
+
+
+async def _precheck_submission(
+    rag, doc_id: str, basename: str, current_hash: str
+) -> InsertOutcome | None:
+    """提交**之前**先问上游：这份文档是不是已经有主了。
+
+    为什么必须提前问
+    ----------------
+    上游给「被拒收」写的 ``dup-*`` 记录，id 是
+    ``compute_mdhash_id(f"{doc_id}-{track_id}-{index}-{file_path}")``
+    （``pipeline.py:1352``）—— **里面含 track_id**，所以每一次被拒的提交
+    都会在上游留下一条**新**记录。只要我们不停地提交，``doc_status`` 就
+    无上界增长，而上游每轮还要对这张表做 O(n) 全表扫描。
+
+    这不是「日志」，是每天都要付钱的表。所以**能自己问出来的，就别让上游
+    去拒**：
+
+    - 文件名被别的主记录占着 → 报失败，**不提交**
+    - 内容哈希在别的文件名下已入库 → 报「内容已在索引中」，**不提交**
+    - 索引里有多份主记录共用一个文件名 → 报「需要人工修复」，**不提交**
+    - 我们自己的 doc_id 上游已经有记录 → 上游的 ``filter_keys`` 会永久拒收，
+      照那一行的真实状态报告，**不提交**
+
+    只有「上游那边确实什么都没有」才提交。
+
+    返回 ``None`` → 可以提交。返回 ``InsertOutcome`` → **不要提交**，
+    照它报告。
+    """
+    store = getattr(rag, "doc_status", None)
+    if store is None:
+        # 没有 doc_status 可问（例如测试里的假 rag）→ 无从预检，照常提交
+        return None
+
+    # 1) 我们自己的 doc_id 在上游已经有记录 → 上游的 filter_keys 只看键在不在，
+    #    不看状态 → 这一行在，我们就**永远**进不去。按那一行的真实状态报告。
+    try:
+        own = await store.get_by_id(doc_id)
+    except Exception:  # pragma: no cover - 上游接口变更时的兜底
+        own = None
+    if own is not None:
+        return await _classify_filename_duplicate(
+            store, doc_id, doc_id, current_hash
+        )
+
+    # 2) 这个文件名在上游有没有主人
+    state, owner_id, owner_row = await _probe_source(store, basename)
+    if state == "conflict":
+        # 上游说「已有多份文档共用这个文件名，得由人来定哪个是原件」——
+        # 这是索引坏了，不能当成正常的跳过。
+        return InsertOutcome(
+            "failed",
+            "索引里已有多份文档共用这个文件名，需要人工修复",
+            duplicate_kind="filename_conflict",
+        )
+    if state == "unique" and owner_id and owner_id != doc_id:
+        # 文件名被**另一份**文档占着 → 我们的内容根本没进索引的资格。
+        # 但要先比内容：内容一样的话，它其实**在**索引里（挂在 owner 下），
+        # 报「文件名冲突」就等于把一份已入库的文档说成没入库。
+        owner_hash = str(_field(owner_row, "content_hash", "") or "")
+        if owner_hash and current_hash and owner_hash == current_hash:
+            return InsertOutcome(
+                "skipped",
+                "已入库（内容在索引里，doc_id 因文件位置变化而不同）",
+                duplicate_kind="filename",
+                doc_id=owner_id,
+            )
+        return InsertOutcome(
+            "failed",
+            "文件名已被索引里的另一份文档占用（LightRAG 按文件名判重），"
+            "本次未入库；请给文件改名，或清空索引目录后重新摄入",
+            duplicate_kind="filename",
+        )
+
+    # 3) 内容是不是已经在别的文件名下
+    if current_hash:
+        try:
+            match = await store.get_doc_by_content_hash(
+                current_hash, exclude_doc_id=doc_id
+            )
+        except Exception:  # pragma: no cover - 上游接口变更时的兜底
+            match = None
+        if match:
+            owner_id = str(match[0] or "")
+            return InsertOutcome(
+                "skipped",
+                "内容已在索引中（以其他文件名入库）",
+                duplicate_kind="content_hash",
+                alias=True,
+                doc_id=owner_id or doc_id,
+            )
+
+    return None
 
 
 def discover_files(root: Path) -> list[Path]:
@@ -698,6 +858,7 @@ async def _verify_indexed(
 
     - ``"indexed"``       —— 在索引里，内容与文件一致
     - ``"stale"``         —— 在索引里，但索引里是**旧版本**
+    - ``"empty"``         —— 上游只留了个**空内容占位**（一个分块都没有）
     - ``"missing"``       —— **不在**索引里（上游没有这一行）
     - ``"not_processed"`` —— 上游有这一行，但状态不是 processed（失败/处理中）
     - ``"unknown"``       —— 没有 doc_status 可问，无法核实（测试里的假 rag）
@@ -717,6 +878,13 @@ async def _verify_indexed(
             return "missing", None
         if _status_value(_field(row, "status")) != "processed":
             return "not_processed", row
+        # ⚠️ 上游对**空白文件**也写 ``processed``，但 ``chunks_count`` 是 0 ——
+        # 一个分块都没有，等于什么都没进索引。而且上游的 doc_status 过滤
+        # 只看键在不在、不看状态 → 这个 doc_id 一旦进来就**永久拒收重插**。
+        # 不认出来的话，每一轮都会重新提交一次，上游每轮多一条记录。
+        chunks_count = _field(row, "chunks_count", None)
+        if isinstance(chunks_count, int) and chunks_count == 0:
+            return "empty", row
 
     # 内容版本比较 —— **本地就能做**，不依赖上游。
     # 顺序很重要：即使没有 doc_status 可问（测试里的假 rag），
@@ -827,17 +995,22 @@ async def ingest(
             failed.append((relative, conflict_reason))
             continue
 
-        if key in path_map:
-            known = path_map[key]
-            known_alias = bool(getattr(known, "alias", False))
-            known_stale = bool(getattr(known, "stale", False))
-            known_hash = known.sha256 if isinstance(known, MappedFile) else ""
+        known = path_map.get(key)
+        known_alias = bool(getattr(known, "alias", False))
+        known_stale = bool(getattr(known, "stale", False))
+        known_hash = known.sha256 if isinstance(known, MappedFile) else ""
+        known_doc_id = str(getattr(known, "doc_id", "") or "")
+        # 旧格式的记录没有 doc_id → 这一轮要把它补上
+        need_doc_id = not known_doc_id
+        digest = digests.get(key, "")
+
+        if known is not None:
             # 这份内容在索引里对应的 doc_id —— **不是**当前相对路径算出来的。
             # 文件在语料目录里搬过家之后，相对路径变了、doc_id 也就变了，
             # 拿新 doc_id 去查上游必然查不到 → 误判成「不在索引里」→
             # 每轮重新提交 → 上游的失败记录无限增长。
-            known_doc_id = getattr(known, "doc_id", "") or build_doc_id(relative)
-            digest = digests.get(key, "")
+            if not known_doc_id:
+                known_doc_id = build_doc_id(relative)
 
             # ⚠️ 上游核实必须放在**所有**分支之前。
             # stale / relocated / alias 三条分支如果直接 continue，
@@ -847,16 +1020,28 @@ async def ingest(
                 rag, path, known_doc_id, known_hash, digest
             )
 
-
             if key in alias_changed:
                 # 别名文件的内容变了 → 删掉别名记录，重新提交一次。
-                # 上游当初是按**内容**判重才拒的，那个 basename 在上游是
+                # 上游当初是按**内容**判重的，那个 basename 在上游是
                 # 空闲的，新内容完全可以以这个名字入库。
                 path_map.pop(key, None)
             elif state == "missing":
                 # 索引里没有这份文档 → 重新提交一次
                 # （上游此时已不拒收 —— doc_id 已经从 doc_status 里消失）
                 path_map.pop(key, None)
+            elif state == "empty":
+                # 上游只留了个**空内容占位**：处理过了，但一个分块都没有。
+                # 上游的 doc_status 过滤只看键在不在 → 这个 doc_id 永久拒收
+                # 重插 → 认出来，别再提交（每提交一次，上游就多一条记录）。
+                empty.append((relative, EMPTY_REASON))
+                path_map[key] = MappedFile(
+                    path=_storable_path(path),
+                    sha256=digest or known_hash,
+                    alias=known_alias,
+                    doc_id=known_doc_id,
+                )
+                save_path_map(settings.working_dir, path_map)
+                continue
             elif state == "not_processed":
                 # 上游有这一行，但不是 processed → **失败**，不是已入库。
                 # 记住 doc_id：下一轮直接核实，不再重复提交（上游每轮一条
@@ -879,9 +1064,13 @@ async def ingest(
                         "请给文件改名，或清空索引目录后重新摄入",
                     )
                 )
+                # ⚠️ alias / stale 标记必须一起留着：清零的话，「内容在别的
+                # 文件名下」这条口径会在下一轮退化成「已入库」（谎报）。
                 path_map[key] = MappedFile(
                     path=_storable_path(path),
                     sha256=known_hash,
+                    alias=known_alias,
+                    stale=known_stale,
                     doc_id=known_doc_id,
                 )
                 save_path_map(settings.working_dir, path_map)
@@ -914,11 +1103,21 @@ async def ingest(
                 elif known_alias:
                     # 这份文件本身没进索引（上游按内容判重），它的内容在索引里
                     # 另一个文件下 —— 说「已入库」是假的。
-                    skipped.append((relative, "内容已在索引中（以其他文件名入库）"))
+                    #
+                    # ⚠️ 归到 ``duplicates`` 桶（CLI 打 ``~``），不是 ``skipped``：
+                    # 验收清单里这条现象写的就是 ``~ xxx.md（内容已在索引中
+                    # （以其他文件名入库））``。而且**两轮输出必须一致** ——
+                    # 第一轮判重时走的是上游的判重结果（duplicates），第二轮走
+                    # path_map 的别名记录（skipped）的话，同一份文件前后两次
+                    # ingest 报出不同的标记，幂等就无从说起了。
+                    duplicates.append((relative, "内容已在索引中（以其他文件名入库）"))
                 else:
-                    if not known_hash or known_stale:
+                    if not known_hash or known_stale or need_doc_id:
                         # 旧格式的记录没有哈希 → 把当前文件的哈希回填进去；
-                        # 之前标过过期、现在内容又对上了 → 过期标记清掉。
+                        # 之前标过过期、现在内容又对上了 → 过期标记清掉；
+                        # 旧格式的记录没有 doc_id → 把这一轮核实到的
+                        # doc_id 回填进去（否则「文件搬过家」的保护在回填
+                        # 之前不生效，每轮都要重新提交一次）。
                         path_map[key] = MappedFile(
                             path=_storable_path(path),
                             sha256=digest or known_hash,
@@ -933,17 +1132,30 @@ async def ingest(
         try:
             text = extract_text(path)
             current_hash = content_hash_of(text)
-            track_id = await rag.ainsert(
-                text,
-                ids=[doc_id],
-                file_paths=[str(path)],
-            )
         except Exception as exc:
             failed.append((relative, f"{type(exc).__name__}: {exc}"))
             continue
 
-        # ainsert 不抛异常不代表入库成功 —— 回 doc_status 核实。
-        outcome = await classify_insert(rag, doc_id, str(track_id), current_hash)
+        # ⚠️ 提交**之前**先问上游「这份文档是不是已经有主了」。
+        #
+        # 上游给被拒收的提交写的 ``dup-*`` 记录，id 里含 track_id
+        # （``pipeline.py:1352``）→ 每提交一次就多一条 → doc_status
+        # 无上界增长。能自己问出来的，就别让上游去拒。
+        outcome = await _precheck_submission(rag, doc_id, key, current_hash)
+        if outcome is None:
+            try:
+                track_id = await rag.ainsert(
+                    text,
+                    ids=[doc_id],
+                    file_paths=[str(path)],
+                )
+            except Exception as exc:
+                failed.append((relative, f"{type(exc).__name__}: {exc}"))
+                continue
+
+            # ainsert 不抛异常不代表入库成功 —— 回 doc_status 核实。
+            outcome = await classify_insert(rag, doc_id, str(track_id), current_hash)
+
         if outcome.status == "inserted":
             path_map[key] = MappedFile(
                 path=_storable_path(path),
@@ -983,10 +1195,16 @@ async def ingest(
             skipped.append((relative, outcome.reason))
         elif outcome.status == "empty":
             # 空文档：上游处理了，但一个分块都没产生。
-            # **不写 path_map** —— 写进去就等于永久标记「已入库」，
-            # 而上游已经用空内容占了这个文件名，它不会再重新处理。
+            #
+            # 记住 doc_id —— 上游已经用空内容占了这个文件名，它不会再重新
+            # 处理这个 doc_id。下一轮靠这一行认出「这是空占位」，不再提交
+            # （每提交一次，上游就多一条记录）。
             empty.append((relative, outcome.reason))
-            continue
+            path_map[key] = MappedFile(
+                path=_storable_path(path),
+                sha256=_file_digest(path),
+                doc_id=outcome.doc_id or doc_id,
+            )
         else:
             failed.append((relative, outcome.reason))
             # 失败的文档也记住 doc_id：下一轮直接核实上游状态，

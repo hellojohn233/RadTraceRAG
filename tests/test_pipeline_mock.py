@@ -317,15 +317,27 @@ async def test_ingest_restores_path_map_after_duplicates(
     assert len(load_path_map(settings.working_dir)) == 4
 
 
-def _count_doc_status_rows(settings) -> int:
+def _count_doc_status_rows(settings, basenames=None) -> int:
     """数上游 doc_status 里有多少行（含 dup-* 记录）。
 
     每轮 ingest 都多几行 → 说明我们在重复提交注定失败的文档。
+
+    ⚠️ ``basenames`` 限定统计范围：**上游的 doc_status 存储是进程级共享
+    命名空间** —— 同一个进程里所有索引实例的记录都落在同一张表上，
+    拿整张表做断言会串到别的测试（第一次写盘时会把别人的行一起写进去）。
     """
     path = settings.working_dir / "kv_store_doc_status.json"
     if not path.exists():
         return 0
-    return len(json.loads(path.read_text(encoding="utf-8")))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if basenames is None:
+        return len(data)
+    wanted = set(basenames)
+    return sum(
+        1
+        for row in data.values()
+        if isinstance(row, dict) and str(row.get("file_path", "")) in wanted
+    )
 
 
 @pytest.mark.asyncio
@@ -462,3 +474,120 @@ async def test_upstream_row_not_processed_is_reported_as_failure(
     assert second.inserted == ()
     assert second.failed, "上游状态不是 processed，必须报失败"
     assert not any("已入库" in reason for _name, reason in second.skipped)
+
+
+@pytest.mark.asyncio
+async def test_empty_document_does_not_grow_doc_status_every_round(
+    tmp_path, settings_factory, mock_models
+):
+    """空文档每轮重提 → 上游 doc_status 每轮多一行。
+
+    上游的 doc_status 过滤**只看键在不在、不看状态** → 空内容占位那个
+    doc_id 永久拒收重插 → 重提永远不会被接受，只是每轮在上游多留一条
+    记录。而这张表每轮还要被 O(n) 全表扫描 → 每轮 ingest 都更慢。
+
+    认出来（``_verify_indexed`` 的 empty 态）+ 记住 doc_id → 只提交一次。
+    """
+    unique = tmp_path.name
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / f"{unique}_blank.md").write_text("   \n\n", encoding="utf-8")
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+
+    name = f"{unique}_blank.md"
+
+    async with rag_session(settings) as rag:
+        rows_before = _count_doc_status_rows(settings, {name})
+        first = await ingest(rag, corpus, settings)
+        rows_after_first = _count_doc_status_rows(settings, {name})
+        second = await ingest(rag, corpus, settings)
+        rows_after_second = _count_doc_status_rows(settings, {name})
+        third = await ingest(rag, corpus, settings)
+        rows_after_third = _count_doc_status_rows(settings, {name})
+
+    assert len(first.empty) == 1, "空白文件是空占位，不算入库"
+    assert len(second.empty) == 1
+    assert len(third.empty) == 1
+    assert rows_after_first - rows_before == 1, "只提交过一次"
+    assert rows_after_second == rows_after_first, "空文档不能每轮重提一次"
+    assert rows_after_third == rows_after_first
+
+
+@pytest.mark.asyncio
+async def test_filename_occupied_by_another_document_does_not_grow_doc_status(
+    tmp_path, settings_factory, mock_models
+):
+    """文件名被索引里的另一份文档占着 → 每轮重提 → 上游每轮多一条 dup 记录。
+
+    上游按文件名判重，被拒的提交会留下一条 ``dup-*`` 记录，而它的 id 里
+    含 track_id → 每轮重提必然多一条新记录。
+
+    现在提交**之前**先问上游「这个文件名有主吗」→ 直接报失败，不提交 →
+    上游一条记录都不多。
+    """
+    unique = tmp_path.name
+    name = f"{unique}_taken.md"
+    corpus_a = tmp_path / "a"
+    corpus_b = tmp_path / "b"
+    corpus_a.mkdir()
+    (corpus_b / "sub").mkdir(parents=True)
+    (corpus_a / name).write_text("甲文档的正文，讲的是肝脏代谢。", encoding="utf-8")
+    # 同一个 basename、不同的相对路径 → 上游按文件名判重会拒掉第二份
+    (corpus_b / "sub" / name).write_text(
+        "乙文档的正文，讲的是脾脏与胰腺。", encoding="utf-8"
+    )
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+
+    async with rag_session(settings) as rag:
+        first = await ingest(rag, corpus_a, settings)
+        assert len(first.inserted) == 1
+        # path_map 丢失 → 逼我们走「靠上游判断」那条路
+        (settings.working_dir / "path_map.json").unlink()
+        rows_before = _count_doc_status_rows(settings, {name})
+
+        second = await ingest(rag, corpus_b, settings)
+        rows_after = _count_doc_status_rows(settings, {name})
+        third = await ingest(rag, corpus_b, settings)
+        rows_after_third = _count_doc_status_rows(settings, {name})
+
+    assert second.failed, "文件名被占用必须报失败（内容根本没进索引）"
+    assert rows_after == rows_before, "被拒的文件不能每轮重提一次（上游每轮多一条记录）"
+    assert rows_after_third == rows_before
+
+
+@pytest.mark.asyncio
+async def test_duplicate_content_is_detected_before_submitting(
+    tmp_path, settings_factory, mock_models
+):
+    """内容与另一份文档相同 → 上游按内容判重。
+
+    判重同样会留下一条 ``dup-*`` 记录（id 含 track_id → 每轮重提多一条）。
+
+    提交前先问上游「这份内容是不是已经有主了」→ 直接报「内容已在索引中」，
+    不提交 → 上游一条记录都不多。
+    """
+    unique = tmp_path.name
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    body = f"{unique} 的重复正文，讲的是胆汁与代谢。\n"
+    (corpus / f"{unique}_first.md").write_text(body, encoding="utf-8")
+    (corpus / f"{unique}_second.md").write_text(body, encoding="utf-8")
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+
+    names = {f"{unique}_first.md", f"{unique}_second.md"}
+
+    async with rag_session(settings) as rag:
+        rows_before = _count_doc_status_rows(settings, names)
+        first = await ingest(rag, corpus, settings)
+        rows_after_first = _count_doc_status_rows(settings, names)
+        second = await ingest(rag, corpus, settings)
+        rows_after_second = _count_doc_status_rows(settings, names)
+
+    assert len(first.inserted) == 1, "只应有一份真的进索引"
+    assert len(first.duplicates) == 1, "另一份是重复内容，不算失败"
+    assert first.failed == ()
+    assert (
+        rows_after_first - rows_before == 1
+    ), "内容判重不该留下 dup-* 记录（只有真入库那份才有一行）"
+    assert len(second.duplicates) == 1
+    assert rows_after_second == rows_after_first
