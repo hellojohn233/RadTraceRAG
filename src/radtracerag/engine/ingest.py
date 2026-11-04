@@ -33,10 +33,48 @@ SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf"}
 #: 路径映射文件名（存放在工作目录下）
 PATH_MAP_FILENAME = "path_map.json"
 
+#: 「索引里躺着的是旧版本」时的统一措辞。
+#:
+#: 上游的 ``doc_status`` 过滤只看键在不在、不看状态 → doc_id 一旦进过
+#: doc_status 就**永久拒收重插**。所以内容改过之后，重跑 ingest 是没有用的，
+#: 只有两条出路：**改名**（换个 basename 重新入库）或**重建索引**。
+#: 这句话必须说清楚，否则用户会一遍遍重跑，然后一遍遍困惑。
+STALE_REASON = (
+    "内容已变化，索引里仍是旧版本；"
+    "如需更新请给文件改名，或清空索引目录后重新摄入"
+)
+
 try:  # pragma: no cover - 上游改名时走兜底分支
     from lightrag.utils_pipeline import normalize_document_file_path
 except Exception:  # pragma: no cover
     normalize_document_file_path = None
+
+try:  # pragma: no cover - 上游改名时走兜底分支
+    from lightrag.utils import sanitize_text_for_encoding
+    from lightrag.utils_pipeline import compute_text_content_hash
+except Exception:  # pragma: no cover
+    sanitize_text_for_encoding = None
+    compute_text_content_hash = None
+
+
+def content_hash_of(text: str) -> str:
+    """上游给文档内容算的哈希 —— 与 ``doc_status`` 里的 ``content_hash`` 同口径。
+
+    上游在 ``pipeline.py`` 里是这么算的：``ids`` 路径先把正文过一遍
+    ``sanitize_text_for_encoding``（去控制字符、去首尾空白），再取
+    ``compute_text_content_hash``。**少了 sanitize 那一步哈希就对不上**
+    —— 实测空白文件的记录里存的是 ``md5("")``，而不是空白串的哈希。
+
+    有了这个哈希就能回答一个关键问题：**索引里现在躺着的是哪一版内容？**
+    拿它和当前文件比一比，就知道索引是不是过期了。
+    """
+    if compute_text_content_hash is None or sanitize_text_for_encoding is None:
+        return ""
+    try:
+        return compute_text_content_hash(sanitize_text_for_encoding(text or ""))
+    except Exception:  # pragma: no cover - 上游行为异常时的兜底
+        return ""
+
 
 
 def _storable_path(path: Path) -> str:
@@ -99,14 +137,21 @@ class MappedFile:
     （内容与索引里另一份文档相同），上游没有以这个名字建索引。
     不区分的话，报告会说「已入库」，而实际上索引里根本没有这份文件 ——
     原件被删掉时，引用的来源路径就指向了一个不存在的文件。
+
+    ``stale`` 标记**索引里躺着的是旧版本**：文件在入库之后被改过。
+    这个标记必须显式存下来 —— 靠哈希比较推断不出来（我们一旦把当前文件
+    的哈希写回映射，下一次就看不出索引过期了）。
     """
 
     #: 项目根相对（项目内）或绝对（项目外）
     path: str
-    #: 文件原始字节的 sha256
+    #: **索引里那一版**的文件字节 sha256（内容变过时**不更新**）
     sha256: str = ""
     #: True = 这份文件本身没进索引（上游判重），它的内容在索引里的另一个文件下
     alias: bool = False
+    #: True = 文件在入库后被改过，索引里仍是旧版本
+    stale: bool = False
+
 
 
 def _file_digest(path: Path) -> str:
@@ -147,6 +192,7 @@ class InsertOutcome:
 
     - ``inserted`` —— 真的进索引了
     - ``skipped`` —— 本次没有提交（已入库，或内容在索引里的另一个文件下）
+    - ``stale`` —— 索引里躺着的是旧版本（文件改过了）
     - ``empty`` —— 上游处理了，但一个分块都没产生（空白文件）
     - ``failed`` —— 上游处理失败，``reason`` 里是上游的原始错误信息
 
@@ -160,6 +206,7 @@ class InsertOutcome:
     duplicate_kind: str = ""
     #: 这份文件本身没进索引（内容在索引里的另一个文件下）
     alias: bool = False
+
 
 
 def _field(record, name: str, default=None):
@@ -183,33 +230,76 @@ def _status_value(raw) -> str:
     return str(value).lower()
 
 
-async def _classify_filename_duplicate(store, doc_id: str, original_doc_id: str):
+async def _classify_filename_duplicate(
+    store, doc_id: str, original_doc_id: str, current_hash: str
+):
     """上游说「这个文件名已经在索引里了」—— 要分清是**哪一种**。
 
-    上游的 ``duplicate_kind="filename"`` 有两种截然不同的情况：
+    上游的 ``duplicate_kind="filename"`` 有几种截然不同的情况：
 
     1. **就是我们自己上一轮插的那份**（``original_doc_id == doc_id``）。
-       文件确实在索引里（除非它是个空文档，一个分块都没产生）。
+       这份文档在 doc_status 里有一行 —— 它的真实 ``status`` 才是判据：
+       - ``processed`` + ``chunks_count == 0`` → 空文档占位；
+       - ``processed`` + 内容哈希对不上 → 索引里是**旧版本**；
+       - ``failed`` → 上一轮就失败了，**索引里没有它**。
     2. **索引里这个文件名被另一份内容占着**（``original_doc_id != doc_id``）。
        我们的内容**根本没进索引** —— 上游按文件名判重，直接把我们丢了。
-       这种情况必须报失败：用户以为入库了，其实检索不到。
 
-    两种都靠 ``doc_status`` 里那条记录自己说话，不猜。
+    ⚠️ 绝不能在这里说「已在索引中」而没有证据：上一轮失败的文档会被
+    上游记成同名重复，说成「已入库」就等于把一个**从没进过索引**的文件
+    报告成入库了 —— 而且这个误报还会被写进 path_map，永久生效。
     """
     try:
         own = await store.get_by_id(doc_id)
     except Exception:  # pragma: no cover - 上游接口变更时的兜底
         own = None
 
-    if own is not None and _status_value(_field(own, "status")) == "processed":
-        chunks_count = _field(own, "chunks_count", None)
-        if isinstance(chunks_count, int) and chunks_count == 0:
-            # 上一轮就是个空文档：名字占着，但索引里没有它的分块
-            return InsertOutcome(
-                "empty", "空文档：上游没有产生任何分块（文件可能是空白）"
-            )
-        return InsertOutcome("skipped", "已入库", duplicate_kind="filename")
+    if own is not None:
+        status = _status_value(_field(own, "status"))
+        if status == "processed":
+            chunks_count = _field(own, "chunks_count", None)
+            if isinstance(chunks_count, int) and chunks_count == 0:
+                # 上游用空内容占了这个文件名。它**不会**重新处理这个 doc_id
+                # （上游的 doc_status 过滤只看键在不在，不看状态）。
+                return InsertOutcome(
+                    "empty",
+                    "空文档：上游以空内容占了这个文件名，不会再重新处理；"
+                    "请给文件改名，或清空索引目录后重新摄入",
+                    duplicate_kind="filename",
+                )
+            stored_hash = str(_field(own, "content_hash", "") or "")
+            if stored_hash and current_hash and stored_hash != current_hash:
+                # 索引里躺着的是旧版本 —— 文件改过了
+                return InsertOutcome(
+                    "stale",
+                    "内容已变化，索引里仍是旧版本；"
+                    "如需更新请给文件改名，或清空索引目录后重新摄入",
+                    duplicate_kind="filename",
+                )
+            return InsertOutcome("skipped", "已入库", duplicate_kind="filename")
 
+        if status == "failed":
+            reason = (
+                _field(own, "error_msg")
+                or _field(own, "content_summary")
+                or "上游处理失败"
+            )
+            return InsertOutcome(
+                "failed",
+                f"{reason}（上游已把这个文档标记为失败，不会自动重试；"
+                "请给文件改名，或清空索引目录后重新摄入）",
+                duplicate_kind="filename",
+            )
+
+        # pending / 其它状态：上游还没处理完，不能当成已入库
+        return InsertOutcome(
+            "failed",
+            f"上游状态为 {status}，文档尚未处理完成；"
+            "请稍后重试，或清空索引目录后重新摄入",
+            duplicate_kind="filename",
+        )
+
+    # 没有我们自己的记录 → 这份文档从没被我们插进去过
     if original_doc_id and original_doc_id != doc_id:
         return InsertOutcome(
             "failed",
@@ -218,16 +308,18 @@ async def _classify_filename_duplicate(store, doc_id: str, original_doc_id: str)
             duplicate_kind="filename",
         )
 
-    # 判不出原文档是谁 → 保守处理：这份文件本身不算入库
+    # 判不出原文档是谁 —— 绝不能猜成「已在索引中」
     return InsertOutcome(
-        "skipped",
-        "内容已在索引中（以其他文件名入库）",
+        "failed",
+        "上游报告文件名重复，但找不到对应的文档记录，无法确认是否已入库；"
+        "请给文件改名，或清空索引目录后重新摄入",
         duplicate_kind="filename",
-        alias=True,
     )
 
 
-async def classify_insert(rag, doc_id: str, track_id: str) -> InsertOutcome:
+async def classify_insert(
+    rag, doc_id: str, track_id: str, current_hash: str = ""
+) -> InsertOutcome:
     """回 ``doc_status`` 核实这份文档到底进没进索引。
 
     ⚠️ 判据只能是**本次 track_id 下的记录**。
@@ -243,6 +335,9 @@ async def classify_insert(rag, doc_id: str, track_id: str) -> InsertOutcome:
     - **被判重** → 本次 track 下只有一条 ``dup-<hash>`` 记录
       （``metadata.is_duplicate=true``），我们这个 doc_id 不在里面
     - **处理失败** → 本次 track 下有我们这个 doc_id，``status == "failed"``
+
+    ``current_hash`` 是当前文件内容的上游口径哈希，用来核对**索引里躺着
+    的是哪一版**。
     """
     store = getattr(rag, "doc_status", None)
     if store is None:
@@ -269,7 +364,9 @@ async def classify_insert(rag, doc_id: str, track_id: str) -> InsertOutcome:
                 f"索引里已有多份文档共用这个文件名，需要人工修复（{kind}）",
             )
         if kind == "filename":
-            return await _classify_filename_duplicate(store, doc_id, original)
+            return await _classify_filename_duplicate(
+                store, doc_id, original, current_hash
+            )
         # content_hash：内容与索引里另一份文档完全相同 → 内容在，名字不在
         return InsertOutcome(
             "skipped",
@@ -277,6 +374,7 @@ async def classify_insert(rag, doc_id: str, track_id: str) -> InsertOutcome:
             duplicate_kind=kind,
             alias=True,
         )
+
 
     # 本次 track 下有我们这个 doc_id → 这就是本次插入的真实结果
     record = same_track.get(doc_id)
@@ -292,11 +390,14 @@ async def classify_insert(rag, doc_id: str, track_id: str) -> InsertOutcome:
     status = _status_value(_field(record, "status"))
     if status == "processed":
         # ⚠️ 上游对**空白文件**也会写 ``processed``，但 ``chunks_count`` 是 0 ——
-        # 一个分块都没有，等于什么都没进索引。报成「已入库」是假的，
-        # 而且会把它写进 path_map 永久标成「已入库」。
+        # 一个分块都没有，等于什么都没进索引。报成「已入库」是假的。
         chunks_count = _field(record, "chunks_count", None)
         if isinstance(chunks_count, int) and chunks_count == 0:
-            return InsertOutcome("empty", "空文档：上游没有产生任何分块（文件可能是空白）")
+            return InsertOutcome(
+                "empty",
+                "空文档：上游没有产生任何分块（文件可能是空白）；"
+                "上游已用空内容占了这个文件名，不会再重新处理",
+            )
         return InsertOutcome("inserted")
     reason = (
         _field(record, "error_msg")
@@ -406,6 +507,7 @@ def load_path_map(working_dir: Path) -> dict[str, MappedFile]:
                 path=str(value.get("path", "")),
                 sha256=str(value.get("sha256", "")),
                 alias=bool(value.get("alias", False)),
+                stale=bool(value.get("stale", False)),
             )
         else:
             # 旧格式：只有路径
@@ -427,9 +529,10 @@ def save_path_map(
                 "path": value.path,
                 "sha256": value.sha256,
                 "alias": value.alias,
+                "stale": value.stale,
             }
             if isinstance(value, MappedFile)
-            else {"path": str(value), "sha256": "", "alias": False}
+            else {"path": str(value), "sha256": "", "alias": False, "stale": False}
         )
         for key, value in mapping.items()
     }
@@ -466,9 +569,14 @@ async def ingest(
     - 已入库的文件 → 计入 ``skipped``（带原因）；
     - 内容在原地改过的文件 → 计入 ``skipped``，原因里明说「索引里仍是旧版本」；
     - 内容与索引里另一份文档相同（上游按内容判重）→ 计入 ``duplicates``；
-    - 空文档（上游一个分块都没产生）→ 计入 ``empty``，**不写进 path_map**；
+    - 空文档（上游一个分块都没产生）→ 计入 ``empty``；
     - 上游按文件名判重、但原文档不是我们的 → 计入 ``failed``（内容根本没进去）；
     - 单个文件抽取或写入失败 → 计入 ``failed``，不影响其他文件。
+
+    ⚠️ 上游 LightRAG 1.5.7 的 ``doc_status`` 过滤**只看键在不在，不看状态**
+    —— doc_id 一旦进过 doc_status 就**永久拒收重插**。所以：
+    空文档、失败过的文档、内容改过的文档都**没法靠重跑解决**，
+    只能改名或重建索引。报告里必须把这一点说清楚。
     """
     root = Path(root)
     files = discover_files(root)
@@ -483,6 +591,9 @@ async def ingest(
     relocated: dict[str, str] = {}
     # 路径没变但内容变了 → 索引里留的还是旧版本，必须明确告诉用户
     changed: dict[str, str] = {}
+    # 别名文件（内容在索引里另一个文件名下）的内容变了 → 它的 basename 在
+    # 上游是空闲的（当初是按**内容**判重的），可以重新提交一次。
+    alias_changed: set[str] = set()
     for path in files:
         key = canonical_basename(path)
         known = path_map.get(key)
@@ -490,6 +601,7 @@ async def ingest(
             continue
         known_path = known.path if isinstance(known, MappedFile) else str(known)
         known_hash = known.sha256 if isinstance(known, MappedFile) else ""
+        known_alias = bool(getattr(known, "alias", False))
         # 比的是解析之后的真实路径，不是字符串：同一个文件用相对路径
         # 和绝对路径写出来也不该被判成「两个同名文件」；项目整体搬家后
         # 相对路径跟着搬，也不该变成假冲突。
@@ -502,7 +614,10 @@ async def ingest(
             # 同一个文件 —— 但内容可能改过。索引里留的还是旧版本，
             # 说「已入库」是骗人的，必须让用户看见。
             if known_hash and digest and digest != known_hash:
-                changed[key] = digest
+                if known_alias:
+                    alias_changed.add(key)
+                else:
+                    changed[key] = digest
             continue
         # 路径变了但内容一样 → 同一个文件搬了家，上游照样按 basename 判重，
         # 它进不去索引 —— 当作跳过，不算冲突。
@@ -533,40 +648,84 @@ async def ingest(
             failed.append((relative, conflict_reason))
             continue
 
-        if key in path_map:
+        if key in path_map and key not in alias_changed:
             known = path_map[key]
             known_alias = bool(getattr(known, "alias", False))
+            known_stale = bool(getattr(known, "stale", False))
+            known_hash = known.sha256 if isinstance(known, MappedFile) else ""
+
             if key in relocated:
                 # 同一个文件搬了家：更新映射里的位置，不重新摄入
                 path_map[key] = MappedFile(
                     path=_storable_path(path),
                     sha256=relocated[key],
                     alias=known_alias,
+                    stale=False,
                 )
                 save_path_map(settings.working_dir, path_map)
                 skipped.append((relative, "已入库（文件位置已更新）"))
-            elif key in changed:
+                continue
+
+            if key in changed:
                 # 内容改过了，索引里留的还是旧版本 —— 必须说清楚，
-                # 不能拿「已入库」糊弄过去。path_map 里的哈希**不更新**，
-                # 否则下一次就看不出索引已经过期了。
-                skipped.append(
-                    (
-                        relative,
-                        "内容已变化，索引里仍是旧版本；"
-                        "如需更新请清空索引目录后重新摄入",
-                    )
+                # 不能拿「已入库」糊弄过去。path_map 里的哈希**不更新**
+                # （它记的是「索引里那一版」的哈希），另外打上 stale 标记，
+                # 这样即使 path_map 丢了、我们把当前文件的哈希写了回去，
+                # 下一次仍然看得出索引已经过期。
+                path_map[key] = MappedFile(
+                    path=_storable_path(path),
+                    sha256=known_hash,
+                    alias=known_alias,
+                    stale=True,
                 )
-            elif known_alias:
-                # 这份文件本身没进索引（上游判重），它的内容在索引里
+                save_path_map(settings.working_dir, path_map)
+                skipped.append((relative, STALE_REASON))
+                continue
+
+            if known_stale:
+                if known_hash:
+                    # 内容又和索引里那一版一致了 —— 用户把内容改回去了，
+                    # 索引其实是最新的。
+                    path_map[key] = MappedFile(
+                        path=_storable_path(path),
+                        sha256=known_hash,
+                        alias=known_alias,
+                        stale=False,
+                    )
+                    save_path_map(settings.working_dir, path_map)
+                    skipped.append((relative, "已入库"))
+                    continue
+                # 索引里那一版的哈希我们不知道（path_map 丢过）→ 保守地
+                # 继续报「索引里是旧版本」，直到用户重建索引。
+                path_map[key] = MappedFile(
+                    path=_storable_path(path),
+                    sha256=known_hash,
+                    alias=known_alias,
+                    stale=True,
+                )
+                save_path_map(settings.working_dir, path_map)
+                skipped.append((relative, STALE_REASON))
+                continue
+
+            if known_alias:
+                # 这份文件本身没进索引（上游按内容判重），它的内容在索引里
                 # 另一个文件下 —— 说「已入库」是假的。
                 skipped.append((relative, "内容已在索引中（以其他文件名入库）"))
-            else:
-                skipped.append((relative, "已入库"))
+                continue
+
+            skipped.append((relative, "已入库"))
             continue
+
+        # 别名文件的内容变了：删掉别名记录，重新提交一次。
+        # 上游当初是按**内容**判重才拒的，那个 basename 在上游是空闲的，
+        # 新内容完全可以以这个名字入库 —— 不需要重建整个索引。
+        if key in alias_changed:
+            path_map.pop(key, None)
 
         doc_id = build_doc_id(relative)
         try:
             text = extract_text(path)
+            current_hash = content_hash_of(text)
             track_id = await rag.ainsert(
                 text,
                 ids=[doc_id],
@@ -577,7 +736,7 @@ async def ingest(
             continue
 
         # ainsert 不抛异常不代表入库成功 —— 回 doc_status 核实。
-        outcome = await classify_insert(rag, doc_id, str(track_id))
+        outcome = await classify_insert(rag, doc_id, str(track_id), current_hash)
         if outcome.status == "inserted":
             path_map[key] = MappedFile(
                 path=_storable_path(path), sha256=_file_digest(path)
@@ -601,10 +760,20 @@ async def ingest(
                 duplicates.append((relative, outcome.reason))
             else:
                 skipped.append((relative, outcome.reason))
+        elif outcome.status == "stale":
+            # 索引里躺着的是旧版本。path_map 里「索引里那一版」的哈希我们
+            # 不知道（path_map 丢过），留空 + 打 stale 标记 —— 宁可一直
+            # 提醒，也不要谎报「已入库」。
+            path_map[key] = MappedFile(
+                path=_storable_path(path),
+                sha256="",
+                stale=True,
+            )
+            skipped.append((relative, outcome.reason))
         elif outcome.status == "empty":
             # 空文档：上游处理了，但一个分块都没产生。
             # **不写 path_map** —— 写进去就等于永久标记「已入库」，
-            # 用户之后往文件里补了内容也再也进不去索引。
+            # 而上游已经用空内容占了这个文件名，它不会再重新处理。
             empty.append((relative, outcome.reason))
             continue
         else:

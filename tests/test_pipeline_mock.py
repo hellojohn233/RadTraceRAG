@@ -179,16 +179,20 @@ async def test_content_duplicate_is_reported_as_skipped_not_inserted(
 
 
 @pytest.mark.asyncio
-async def test_ingest_after_path_map_loss_reports_duplicates_not_inserted(
+async def test_ingest_after_path_map_loss_reports_already_indexed_not_inserted(
     tmp_path, settings_factory, mock_models, corpus
 ):
-    """path_map 丢了之后重跑，不能再报「已入库」。
+    """path_map 丢了之后重跑，不能再报「新增」。
 
     上游会按 doc_id 判重：同一份文档第二次插入时，它另起一条 ``dup-*``
     记录并把这次插入标记为失败。而我们这个 doc_id 在 doc_status 里**还留着
     上一轮的 processed 行** —— 直接查它会把「本次被拒收」误判成「已入库」。
 
     判据只能是**本次 track_id** 下的记录。
+
+    报告的口径：上游报的是「文件名重复」，而原文档就是我们自己的 doc_id
+    —— 这几份文件确实在索引里（第一轮真插进去了），所以是「已入库」，
+    不是「内容与别人重复」。
     """
     settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
     async with rag_session(settings) as rag:
@@ -201,13 +205,89 @@ async def test_ingest_after_path_map_loss_reports_duplicates_not_inserted(
         second = await ingest(rag, corpus, settings)
 
     assert second.inserted == (), "上游判重了，本次没有任何新文档入库"
-    # 上游报的是「文件名重复」，而原文档就是我们自己的 doc_id ——
-    # 这四份文件确实在索引里（第一轮真插进去了），所以是「已入库」，
-    # 不是「内容与别人重复」。
     assert len(second.skipped) == 4
     assert {reason for _name, reason in second.skipped} == {"已入库"}
     assert second.duplicates == ()
     assert second.failed == ()
+
+
+@pytest.mark.asyncio
+async def test_failed_document_is_reported_as_failed_on_retry(
+    tmp_path, settings_factory, mock_models, corpus, monkeypatch
+):
+    """上一轮上游失败的文档，本轮**不能**被报成「已在索引中」。
+
+    上游一旦给某个 doc_id 记过 doc_status，就**永久拒收**它的重插 ——
+    所以失败的文档下一轮会被上游判成「文件名重复」。这时候如果顺着
+    duplicate_kind 就报「已入库」，等于把一个从没进过索引的文件报告成
+    入库了，而且这个误报还会被写进 path_map 永久生效。
+
+    正确做法：回 doc_status 看**我们自己那行记录的真实状态** ——
+    它是 failed，就报失败，并把上游的原始错误带出来。
+    """
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("simulated upstream LLM failure")
+
+    monkeypatch.setattr("radtracerag.engine.rag.build_llm_func", lambda s: _boom)
+
+    async with rag_session(settings) as rag:
+        first = await ingest(rag, corpus, settings)
+        assert first.inserted == ()
+        assert first.failed, "上游故障必须报成失败"
+
+    # 恢复正常
+    monkeypatch.setattr("radtracerag.engine.rag.build_llm_func", lambda s: _fake_llm)
+
+    async with rag_session(settings) as rag:
+        second = await ingest(rag, corpus, settings)
+
+    assert second.inserted == (), "上游不会重新处理失败的 doc_id"
+    assert second.duplicates == (), "不能谎报成「已在索引中」"
+    assert second.failed, "必须报成失败"
+    assert "simulated upstream LLM failure" in second.failed[0][1]
+    # 更关键：不许把它写进 path_map（写了就永久静默消失）
+    assert load_path_map(settings.working_dir) == {}
+
+
+@pytest.mark.asyncio
+async def test_content_changed_after_path_map_loss_is_reported_as_stale(
+    tmp_path, settings_factory, mock_models, corpus
+):
+    """path_map 丢了 + 文件内容改过 → 必须说「索引里仍是旧版本」。
+
+    上游 doc_status 的主行带着 ``content_hash``（上游口径：正文先过
+    ``sanitize_text_for_encoding`` 再取 md5）—— 拿它和当前文件比一比就知道
+    索引里躺着的是哪一版。
+
+    而且这个提醒**不能只出现一次**：上一次实现把当前文件的哈希写回了
+    path_map，下一次就以为「已入库」，过期状态被自己抹掉了。
+    """
+    settings = settings_factory(RAG_WORKING_DIR=str(tmp_path / "storage"))
+    async with rag_session(settings) as rag:
+        first = await ingest(rag, corpus, settings)
+        assert len(first.inserted) == 4
+
+        (settings.working_dir / "path_map.json").unlink()
+        target = corpus / sorted(p.name for p in corpus.iterdir())[0]
+        target.write_text("完全不同的新内容。\n", encoding="utf-8")
+
+        second = await ingest(rag, corpus, settings)
+        third = await ingest(rag, corpus, settings)
+
+    assert second.inserted == ()
+    stale_reasons = [
+        reason for _name, reason in second.skipped if "内容已变化" in reason
+    ]
+    assert stale_reasons, f"改过内容的文件必须报「内容已变化」：{second.skipped}"
+    third_reasons = [
+        reason for _name, reason in third.skipped if "内容已变化" in reason
+    ]
+    assert third_reasons, "过期提醒不能只出现一次"
+    stored = load_path_map(settings.working_dir)
+    assert any(entry.stale for entry in stored.values()), "过期状态要落到 path_map 里"
+
 
 
 @pytest.mark.asyncio
