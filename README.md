@@ -1,13 +1,33 @@
-# RadTraceRAG
-
 <p align="center">
-  <img src="assets/png/logo-lockup-light.png" alt="RadTraceRAG" width="520">
+  <img src="assets/hero.png" alt="RadTraceRAG 概念图：左侧是医学影像的像素值分布直方图，朱砂色窗位框选出其中一段灰阶；一条追溯线从窗位折向右侧，接上四条带编号的证据，每条写明来源条目" width="100%" />
 </p>
 
-**面向医学影像问答的可追溯多模态 RAG 项目。** 通过视觉语言模型理解影像，用 [LightRAG](https://github.com/HKUDS/LightRAG) 检索相关医学知识，并将回答与证据关联起来。
+<h1 align="center">
+  <img src="assets/logo/final/radtracerag-lockup-2400.png" alt="RadTraceRAG" width="440" />
+</h1>
+
+<p align="center">
+  <b>面向医学影像问答的可追溯多模态 RAG 项目</b><br />
+  <sub>视觉语言模型读片 · LightRAG 检索医学知识 · 每条回答都钉在编号证据上</sub>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11%2B-16202E?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11 及以上" />
+  <img src="https://img.shields.io/badge/uv-16202E?style=for-the-badge&logo=uv&logoColor=white" alt="uv" />
+  <img src="https://img.shields.io/badge/LightRAG-HKU-16202E?style=for-the-badge" alt="LightRAG" />
+  <img src="https://img.shields.io/badge/FastAPI-16202E?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Streamlit-16202E?style=for-the-badge&logo=streamlit&logoColor=white" alt="Streamlit" />
+  <img src="https://img.shields.io/badge/Milvus-16202E?style=for-the-badge&logo=milvus&logoColor=white" alt="Milvus" />
+  <img src="https://img.shields.io/badge/SLAKE-16202E?style=for-the-badge" alt="SLAKE 数据集" />
+</p>
+
+---
+
+通过视觉语言模型理解影像，用 [LightRAG](https://github.com/HKUDS/LightRAG) 检索相关医学知识，并将回答与证据关联起来。
 
 RadTraceRAG 关注一个可以量化的问题：**当问题同时需要看懂影像和使用外部知识时，检索究竟有没有帮助？** 项目会在同一数据与模型设置下比较直接回答、向量检索和图增强检索，公开逐题结果、检索指标与失败案例。
 
+> [!WARNING]
 > **当前阶段：项目骨架已建立。** Python 包和 LightRAG 依赖可以安装，环境检查命令可以运行；数据导入、完整问答流程与实验结果仍在开发中。下文的能力与指标是项目目标，不代表已经取得实验结果。
 
 ## 项目目标
@@ -16,10 +36,10 @@ RadTraceRAG 关注一个可以量化的问题：**当问题同时需要看懂影
 
 RadTraceRAG 将这几个环节分开：
 
-- **图像理解：**提取与当前问题相关的可见信息，而不是为整张图生成泛化描述。
-- **知识检索：**从可追溯的医学知识事实中寻找证据，保留证据 ID 与排序。
-- **基于证据回答：**同时使用原图和检索结果生成简短答案，显示答案所依赖的证据。
-- **独立评测：**按视觉题、知识题分别统计结果，并测量检索、回答、引用和成本。
+- **图像理解**：提取与当前问题相关的可见信息，而不是为整张图生成泛化描述。
+- **知识检索**：从可追溯的医学知识事实中寻找证据，保留证据 ID 与排序。
+- **基于证据回答**：同时使用原图和检索结果生成简短答案，显示答案所依赖的证据。
+- **独立评测**：按视觉题、知识题分别统计结果，并测量检索、回答、引用和成本。
 
 项目定位为医学影像学习与研究工具，不提供患者诊断或治疗建议。
 
@@ -161,10 +181,10 @@ SLAKE 的参考答案可以用于问答评测，但其 <code>triple</code> 字�
 
 计划发布的指标包括：
 
-- **检索：**人工标注集上的 Evidence Recall@k 与 MRR。
-- **回答：**归一化 Exact Match；按 <code>vqa</code> / <code>kvqa</code>、开放题 / 封闭题分别报告。
-- **证据：**引用是否来自实际检索结果，以及抽样检查的证据支持率。
-- **效率：**p50/p95 响应时间、模型调用次数与估算成本。
+- **检索**：人工标注集上的 Evidence Recall@k 与 MRR。
+- **回答**：归一化 Exact Match；按 <code>vqa</code> / <code>kvqa</code>、开放题 / 封闭题分别报告。
+- **证据**：引用是否来自实际检索结果，以及抽样检查的证据支持率。
+- **效率**：p50/p95 响应时间、模型调用次数与估算成本。
 
 测试问题、参考答案及根据它们生成的解释不会进入检索索引。图检索如果没有优于向量检索，也会在实验报告中保留这一结果和失败分析。
 

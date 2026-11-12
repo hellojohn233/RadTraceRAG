@@ -123,6 +123,8 @@
 | 横版位图 2400px | `assets/logo/final/radtracerag-lockup-2400-{paper,white}.jpg` |
 | 标志图标 | `assets/png/logo-mark-{32…1024}.png`、`logo-mark-favicon-{16,32,180}.png` |
 | 深浅横版 | `assets/png/logo-lockup.png`、`logo-lockup-light.png` |
+| 横版透明底 | `assets/logo/final/radtracerag-lockup-2400.png`（README 用这个，白底页面上不留色块） |
+| README 首屏 | `assets/hero.png`（`python assets/make_hero.py` 从 token 生成） |
 
 ## 图形语言
 
@@ -166,7 +168,8 @@
 ## 改基调的流程
 
 1. 改 `theme.py` 的 token 字典
-2. 跑 `python assets/make_style_board.py`（token JSON + 视觉板一起更新）
+2. 跑 `python assets/make_style_board.py`（token JSON + 视觉板一起更新）和
+   `python assets/make_hero.py`（README 首屏）
 3. 起 UI 截图对照，确认视觉漂移在预期内
 4. 改 `doc/visual-language.md` 里对应的表格
 5. 提交时说明「改的是哪一档、为什么」
